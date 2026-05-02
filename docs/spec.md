@@ -680,11 +680,20 @@ public class WorkflowDefinitionRegistryOptions
     public string WorkflowsDirectory { get; set; } = "Workflows";
 }
 
+// Public interface — WorkflowDefinition is internal, so Get()/TryGet() live on an
+// internal extension interface (IWorkflowDefinitionRegistryInternal) used only by the engine.
+// Consumers inject IWorkflowDefinitionRegistry and pass it to RunWorkflowAsync(); they
+// never call Get() directly.
 public interface IWorkflowDefinitionRegistry
+{
+    IReadOnlyCollection<string> WorkflowNames { get; }
+}
+
+// Engine-internal only — not visible to library consumers
+internal interface IWorkflowDefinitionRegistryInternal : IWorkflowDefinitionRegistry
 {
     WorkflowDefinition Get(string workflowName);
     bool TryGet(string workflowName, out WorkflowDefinition? definition);
-    IReadOnlyCollection<string> WorkflowNames { get; }
 }
 
 // Extensions/OrchestrationContextExtensions.cs
