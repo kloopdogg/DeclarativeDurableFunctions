@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/DeclarativeDurableFunctions/DeclarativeDurableFunctions.csproj" />
+  <Project Path="src/DeclarativeDurableFunctions.TestApp/DeclarativeDurableFunctions.TestApp.csproj" />
+  <Project Path="tests/DeclarativeDurableFunctions.Tests/DeclarativeDurableFunctions.Tests.csproj" />
+</Solution>

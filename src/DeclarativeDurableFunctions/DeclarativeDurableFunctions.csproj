@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>DeclarativeDurableFunctions</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.DurableTask" Version="1.*" />
+    <PackageReference Include="YamlDotNet" Version="16.*" />
+  </ItemGroup>
+</Project>
