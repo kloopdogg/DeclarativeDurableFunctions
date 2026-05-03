@@ -729,15 +729,15 @@ internal enum StepType
     Switch
 }
 
-// Models/RetryPolicy.cs
-internal sealed class RetryPolicy
+// Models/AppRetryPolicy.cs
+internal sealed class AppRetryPolicy
 {
     public int MaxAttempts { get; init; }
     public string FirstRetryInterval { get; init; } = "PT1S";  // ISO 8601
     public string? MaxRetryInterval { get; init; }
     public double BackoffCoefficient { get; init; } = 1.0;
 
-    public TaskRetryPolicy ToTaskRetryPolicy();  // converts to SDK type
+    public RetryPolicy ToSdkRetryPolicy();  // returns Microsoft.DurableTask.RetryPolicy
 }
 
 // Models/StepDefinition.cs
@@ -750,7 +750,7 @@ internal sealed class StepDefinition
     public object? Input { get; init; }           // string (expression) or Dictionary (object template)
     public string? Output { get; init; }
     public string? Condition { get; init; }
-    public RetryPolicy? Retry { get; init; }
+    public AppRetryPolicy? Retry { get; init; }
 
     // Foreach / SubOrchestration
     public string? Source { get; init; }      // foreach only
@@ -876,7 +876,7 @@ For each step in definition.Steps:
 
 ```
 resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx)
-options = step.Retry != null ? new TaskOptions(step.Retry.ToTaskRetryPolicy()) : null
+options = step.Retry != null ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()) : null
 result = await context.CallActivityAsync<JsonElement>(step.ActivityName, resolvedInput, options)
 return result
 ```
@@ -889,7 +889,7 @@ instanceIdSuffix = step.InstanceId != null
     ? ExpressionEvaluator.Evaluate(step.InstanceId, execCtx)?.ToString()
     : context.NewGuid().ToString()
 instanceId = $"{execCtx.InstanceId}:{step.Name}:{instanceIdSuffix}"
-retryPolicy = step.Retry?.ToTaskRetryPolicy()
+retryPolicy = step.Retry?.ToSdkRetryPolicy()
 options = new SubOrchestrationOptions(retryPolicy) { InstanceId = instanceId }
 result = await context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName, resolvedInput, options)
 return result
@@ -909,14 +909,14 @@ tasks = items.Select((item, index) =>
     resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx)
 
     if step.ActivityName != null:
-        activityOptions = step.Retry != null ? new TaskOptions(step.Retry.ToTaskRetryPolicy()) : null
+        activityOptions = step.Retry != null ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()) : null
         return context.CallActivityAsync<JsonElement>(step.ActivityName, resolvedInput, activityOptions)
     else:
         instanceIdSuffix = step.InstanceId != null
             ? ExpressionEvaluator.Evaluate(step.InstanceId, iterCtx)?.ToString()
             : context.NewGuid().ToString()
         instanceId = $"{execCtx.InstanceId}:{step.Name}:{instanceIdSuffix}"
-        retryPolicy = step.Retry?.ToTaskRetryPolicy()
+        retryPolicy = step.Retry?.ToSdkRetryPolicy()
         options = new SubOrchestrationOptions(retryPolicy) { InstanceId = instanceId }
         return context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName, resolvedInput, options)
 })
@@ -1136,3 +1136,8 @@ Execute in this order. Each phase should compile and all tests should pass befor
 - Dynamic workflow name in `RunWorkflowAsync` (v1 always uses `context.Name`)
 - Durable Entities integration
 - Signal/raise-event helper activity (could be a convenience in v2)
+
+---
+
+## 12. References
+- [Durable Functions Error Handling - RetryPolicy](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-error-handling?tabs=csharp&pivots=durable-functions)

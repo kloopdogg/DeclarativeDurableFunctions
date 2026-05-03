@@ -9,7 +9,7 @@ internal sealed class StepDefinition
     public object? Input { get; init; }
     public string? Output { get; init; }
     public string? Condition { get; init; }
-    public RetryPolicy? Retry { get; init; }
+    public AppRetryPolicy? Retry { get; init; }
 
     public string? Source { get; init; }
     public string? InstanceId { get; init; }

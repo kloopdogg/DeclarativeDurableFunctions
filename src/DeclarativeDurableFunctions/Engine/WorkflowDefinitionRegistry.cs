@@ -16,7 +16,7 @@ internal sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistryIn
     public WorkflowDefinition Get(string workflowName)
     {
         if (!_definitions.TryGetValue(workflowName, out var definition))
-            throw new NotImplementedException();
+            throw new Exceptions.WorkflowDefinitionException($"Workflow '{workflowName}' not found.", workflowName);
         return definition;
     }
 
