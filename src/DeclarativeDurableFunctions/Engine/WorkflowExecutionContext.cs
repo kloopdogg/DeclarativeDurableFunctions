@@ -33,6 +33,20 @@ internal sealed class WorkflowExecutionContext
         IterationIndex = iterationIndex;
     }
 
+    private WorkflowExecutionContext(
+        JsonElement input,
+        string instanceId,
+        string? parentInstanceId,
+        Dictionary<string, object?> outputs)
+    {
+        Input = input;
+        InstanceId = instanceId;
+        ParentInstanceId = parentInstanceId;
+        _outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
+        IterationItem = null;
+        IterationIndex = null;
+    }
+
     public JsonElement Input { get; }
     public string InstanceId { get; }
     public string? ParentInstanceId { get; }
@@ -54,4 +68,7 @@ internal sealed class WorkflowExecutionContext
 
     public WorkflowExecutionContext CreateIterationScope(JsonElement item, int index)
         => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs, item, index);
+
+    public WorkflowExecutionContext CreateParallelBranchScope()
+        => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs);
 }
