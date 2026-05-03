@@ -26,10 +26,10 @@ Wall clock estimate with parallelism: ~2.5 hours. Sequential equivalent: ~7 hour
 **Agent:** 1 agent  
 **Model:** Sonnet  
 **Output:**
-- `DeclarativeDurableFunctions/DeclarativeDurableFunctions.csproj` — class library targeting `net8.0`, isolated worker SDK + YamlDotNet refs
+- `DeclarativeDurableFunctions/DeclarativeDurableFunctions.csproj` — class library targeting `net10.0`, isolated worker SDK + YamlDotNet refs
 - `DeclarativeDurableFunctions.Tests/DeclarativeDurableFunctions.Tests.csproj` — xUnit test project
-- `DeclarativeDurableFunctions.Sample/DeclarativeDurableFunctions.Sample.csproj` — Azure Functions isolated worker app
-- `DeclarativeDurableFunctions.sln` — solution file
+- `DeclarativeDurableFunctions.TestApp/DeclarativeDurableFunctions.TestApp.csproj` — Azure Functions isolated worker app
+- `DeclarativeDurableFunctions.slnx` — solution file
 
 ---
 
@@ -37,33 +37,36 @@ Wall clock estimate with parallelism: ~2.5 hours. Sequential equivalent: ~7 hour
 
 #### Human review
 Check that:
-- All three projects target the right frameworks (`net8.0` for the library and sample, `net8.0` for tests)
+- All three projects target the right frameworks (`net10.0` for the library and test app, `net10.0` for tests)
 - The class library references `Microsoft.Azure.Functions.Worker.Extensions.DurableTask` (isolated worker, not the in-process package)
 - YamlDotNet is referenced in the class library
 - xUnit + Moq (or NSubstitute) are referenced in the test project
-- The sample project references the class library project (not a NuGet path yet)
+- The test app references the class library project (not a NuGet path yet)
 
 #### Copilot review (somewhat-manual)
 
 > **Prompt for GitHub Copilot (GPT-5.4):**
 >
-> Review the scaffolded solution structure for `DeclarativeDurableFunctions`. The project adds a declarative YAML layer on top of Azure Durable Functions (isolated worker model). You have already read `CLAUDE.md` and `README.md` for full context.
+> Review the scaffolded solution structure for `DeclarativeDurableFunctions`. The project adds a declarative YAML layer on top of Azure Durable Functions using the isolated worker model. You have already read `CLAUDE.md` and `README.md` for context.
 >
 > Review the following files and answer each question:
 >
-> - `DeclarativeDurableFunctions/DeclarativeDurableFunctions.csproj`
-> - `DeclarativeDurableFunctions.Tests/DeclarativeDurableFunctions.Tests.csproj`
-> - `DeclarativeDurableFunctions.Sample/DeclarativeDurableFunctions.Sample.csproj`
-> - `DeclarativeDurableFunctions.sln`
+> - `src/DeclarativeDurableFunctions/DeclarativeDurableFunctions.csproj`
+> - `tests/DeclarativeDurableFunctions.Tests/DeclarativeDurableFunctions.Tests.csproj`
+> - `src/DeclarativeDurableFunctions.TestApp/DeclarativeDurableFunctions.TestApp.csproj`
+> - `DeclarativeDurableFunctions.slnx`
 >
 > **Questions:**
-> 1. Does the class library reference the **isolated worker** Durable Functions package (`Microsoft.Azure.Functions.Worker.Extensions.DurableTask`), not the in-process package (`Microsoft.Azure.WebJobs.Extensions.DurableTask`)? This is non-negotiable — the in-process model is deprecated.
-> 2. Is YamlDotNet present in the class library? Is the version recent enough to support deserializing to POCOs?
-> 3. Does the test project have xUnit and a mocking library (Moq or NSubstitute)?
-> 4. Are there any unnecessary dependencies that could introduce conflicts or bloat?
-> 5. Is there anything structurally wrong with the solution layout that will cause friction later?
+> 1. Does the class library reference the isolated worker Durable Functions package (`Microsoft.Azure.Functions.Worker.Extensions.DurableTask`), and avoid the in-process package (`Microsoft.Azure.WebJobs.Extensions.DurableTask`)? This is non-negotiable.
+> 2. Is `YamlDotNet` present in the class library, and is it on a concrete pinned version rather than a floating wildcard version?
+> 3. Does the test project include `xunit` and a mocking library (`Moq` or `NSubstitute`)?
+> 4. Does the test project avoid `FluentAssertions` and other unnecessary dependencies?
+> 5. Are package versions pinned across all three `.csproj` files, rather than using floating versions like `1.*`, `2.*`, or `17.*`?
+> 6. Does the test app reference the class library via a project reference, and does the `.slnx` include exactly the expected three projects?
+> 7. Are the target frameworks and overall scaffold consistent with the current plan and repository conventions?
+> 8. Is there anything structurally wrong with the current layout or dependency setup that is likely to cause friction later?
 >
-> Return a verdict: **Pass** or **Needs changes**, with a bullet list of any specific issues.
+> Return a verdict: **Pass** or **Needs changes**, with a bullet list of specific issues.
 
 ---
 
