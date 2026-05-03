@@ -1136,3 +1136,8 @@ Execute in this order. Each phase should compile and all tests should pass befor
 - Dynamic workflow name in `RunWorkflowAsync` (v1 always uses `context.Name`)
 - Durable Entities integration
 - Signal/raise-event helper activity (could be a convenience in v2)
+
+---
+
+## 12. References
+- [Durable Functions Error Handling - RetryPolicy](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-error-handling?tabs=csharp&pivots=durable-functions)
