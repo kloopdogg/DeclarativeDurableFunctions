@@ -113,6 +113,14 @@ internal static class WorkflowDefinitionLoader
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (parallel) is missing required 'steps' sequence.", workflowContext);
                 subSteps = ParseSteps(parallelStepsRaw, workflowContext);
+                foreach (var child in subSteps)
+                {
+                    if (child.Output != null)
+                        throw new WorkflowDefinitionException(
+                            $"Step '{child.Name}' inside parallel block '{name}': 'output:' is not valid on parallel child steps. " +
+                            $"Branch results are keyed by step name and collected via the block's own 'output:' field.",
+                            workflowContext);
+                }
                 break;
 
             case StepType.WaitForEvent:

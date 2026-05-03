@@ -40,7 +40,7 @@ internal static class ExpressionEvaluator
     {
         var single = SingleExpr.Match(expression);
         var inner = single.Success ? single.Groups[1].Value.Trim() : expression.Trim();
-        var result = EvaluateInner(inner, expression, ctx);
+        var result = EvaluateInner(inner, expression, ctx, isCondition: true);
         return IsTruthy(result);
     }
 
@@ -67,14 +67,14 @@ internal static class ExpressionEvaluator
         return result;
     }
 
-    private static object? EvaluateInner(string inner, string fullExpression, WorkflowExecutionContext ctx)
+    private static object? EvaluateInner(string inner, string fullExpression, WorkflowExecutionContext ctx, bool isCondition = false)
     {
         try
         {
             var lexer = new ExprLexer(inner);
             var parser = new ExprParser(lexer, fullExpression);
             var node = parser.Parse();
-            return EvalNode(node, ctx, fullExpression, isCondition: false);
+            return EvalNode(node, ctx, fullExpression, isCondition);
         }
         catch (WorkflowExpressionException) { throw; }
         catch (Exception ex)

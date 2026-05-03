@@ -187,7 +187,7 @@ Dispatch table (from `CLAUDE.md`):
 | Activity | `context.CallActivityAsync(name, resolvedInput)` |
 | SubOrchestration | `context.CallSubOrchestratorAsync(workflowName, resolvedInput, new SubOrchestrationOptions { InstanceId = id })` |
 | Foreach | `items.Select(i => Dispatch(step, i))` → `Task.WhenAll` |
-| Parallel | `steps.Select(s => Dispatch(s))` → `Task.WhenAll` |
+| Parallel | fork one `WorkflowExecutionContext` snapshot per branch → `Task.WhenAll` → build aggregate keyed by step name → store under block `output:` |
 | WaitForEvent | `context.WaitForExternalEvent<JsonElement>(name)` raced against a timer |
 | Switch | evaluate expression → walk matching case steps |
 
@@ -196,7 +196,9 @@ Critical correctness requirements:
 - Instance ID format: `{parentInstanceId}:{stepName}:{suffix}`
 - `condition` fields must be evaluated before executing the step; skip step if false
 - `foreach` must fork a scoped `WorkflowExecutionContext` per iteration carrying `$item` and `$index`
-- `wait-for-event` timeout uses ISO 8601 duration parsed into a `TimeSpan`; `on-timeout: continue` vs `fail` controls whether timeout throws or continues
+- `parallel` must fork a snapshot `WorkflowExecutionContext` per branch (branches cannot observe each other's writes); after `Task.WhenAll`, build a aggregate object keyed by child step name and store it under the block's `output:` field; null entries are always included
+- `wait-for-event` timeout uses ISO 8601 duration parsed into a `TimeSpan`; `on-timeout: continue` materializes **explicit null** under the output name (not missing key); `on-timeout: fail` throws `WorkflowTimeoutException`
+- `output:` on a child step inside a parallel block is a load-time validation error in `WorkflowDefinitionLoader`
 
 ---
 
@@ -209,7 +211,10 @@ Check that:
 - `context.NewGuid()` is used everywhere an instance ID is generated — grep for `Guid.NewGuid` and it should return zero results in `WorkflowRunner.cs`
 - The `foreach` dispatch creates a scoped context per iteration (not a shared one)
 - `Task.WhenAll` is used correctly for both `foreach` and `parallel` — no accidental sequential execution
+- `parallel` forks a separate snapshot context per branch — grep confirms the same `execCtx` is not passed to all children
+- `parallel` builds an aggregate object keyed by child step name and stores it under the block's `output:` after `Task.WhenAll`
 - `wait-for-event` uses `Task.WhenAny` to race the event against the timer, not `await` on both
+- `wait-for-event` with `on-timeout: continue` stores explicit null, not missing key
 - The `switch` default case is handled (no case match → run default steps or continue)
 - Retry policy on Activity steps wires into `CallActivityOptions` correctly
 
@@ -233,11 +238,13 @@ Check that:
 > **Correctness:**
 > 4. For `foreach` steps: does the runner create a **scoped** `WorkflowExecutionContext` per iteration that carries `$item` and `$index` without mutating the parent context?
 > 5. For `foreach` and `parallel` steps: does the runner use `Task.WhenAll` to execute child steps concurrently, not a sequential loop?
-> 6. For `wait-for-event` steps: does the runner use `Task.WhenAny` to race the external event against a Durable timer? A plain `await context.WaitForExternalEvent(...)` with no timeout race is incorrect.
-> 7. For `wait-for-event` with `on-timeout: continue`: does the runner continue execution rather than throw when the timer fires first?
-> 8. For `switch` steps: is the default case handled when no case matches?
-> 9. Does the runner evaluate `condition` expressions before executing each step, and skip the step when the condition is false?
-> 10. For `Activity` steps with a retry policy: does the retry config wire into `CallActivityOptions` correctly?
+> 6. For `parallel` steps: does each branch run against its own snapshot of the parent context (`CreateParallelBranchScope`)? Passing the same context to all branches is a correctness bug — sibling branches must not observe each other's writes.
+> 7. For `parallel` steps: after `Task.WhenAll`, does the runner build an aggregate object keyed by child step name and store it under the block's `output:` field? Null entries must be present for branches that produced no result (switch, skipped condition, timeout-continue).
+> 8. For `wait-for-event` steps: does the runner use `Task.WhenAny` to race the external event against a Durable timer? A plain `await context.WaitForExternalEvent(...)` with no timeout race is incorrect.
+> 9. For `wait-for-event` with `on-timeout: continue`: does the runner store **explicit null** under the output name rather than leaving the key absent? A missing key causes downstream expression failures; explicit null is the correct behavior.
+> 10. For `switch` steps: is the default case handled when no case matches?
+> 11. Does the runner evaluate `condition` expressions before executing each step, and skip the step when the condition is false?
+> 12. For `Activity` steps with a retry policy: does the retry config wire into `CallActivityOptions` correctly?
 >
 > **Sub-orchestration instance IDs:**
 > 11. Is the instance ID format `{parentInstanceId}:{stepName}:{suffix}` as specified?
@@ -265,11 +272,20 @@ Cases to cover: whole-value single expression preserves type (object, array, num
 
 Uses a mock `TaskOrchestrationContext`. One test per step type verifying the correct Durable Functions call is made with correctly resolved input. Include: activity with retry, foreach fan-out (verify `Task.WhenAll`), wait-for-event timeout fires (verify continue vs fail), switch routing to correct case, condition false skips step.
 
+Parallel-specific cases (these are the most important new tests given the fan-in semantics change):
+- Parallel branches run against isolated contexts — a branch cannot read a sibling's output
+- Parallel aggregate is keyed by child step name and stored under the block's `output:`
+- Null entries appear in the aggregate for switch branches and condition-skipped branches
+- `wait-for-event` timeout-continue stores explicit null (not missing key) in both sequential and parallel-branch contexts
+- `output:` on a parallel child is rejected at load time (test belongs in 4C, not here, but note the dependency)
+
 ### Agent 4C — YAML loader tests
 **Model:** Sonnet  
 **Output:** `DeclarativeDurableFunctions.Tests/WorkflowDefinitionRegistryTests.cs`
 
 Round-trip tests: load the sample YAML files from `docs/vision.md` (inline as strings), verify `WorkflowDefinition` fields are populated correctly. Edge cases: missing required fields, unknown step type, invalid ISO 8601 duration.
+
+Add: `output:` on a parallel child step throws `WorkflowDefinitionException` at load time (not silently ignored).
 
 ---
 
@@ -298,9 +314,13 @@ Check that:
 > 1. Do the `ExpressionEvaluator` tests cover the **whole-value single expression preserves type** rule? This is the most subtle behavioral rule in the spec — a `{{stepOutput}}` that resolves to an array should remain an array, not be stringified.
 > 2. Do the `ExpressionEvaluator` tests cover embedded interpolation (`"Order {{$item.id}} received"` → string)?
 > 3. Do the `WorkflowRunner` tests cover all six step types: Activity, SubOrchestration, Foreach, Parallel, WaitForEvent, Switch?
-> 4. Is there a test that verifies `wait-for-event` with `on-timeout: continue` does not throw?
+> 4. Is there a test that verifies `wait-for-event` with `on-timeout: continue` does not throw, and that it stores **explicit null** under the output name (not a missing key)?
 > 5. Is there a test that verifies `condition: false` causes a step to be skipped?
 > 6. Is there a test that verifies the correct Durable Functions call is made for sub-orchestration, including the instance ID format?
+> 7. For `parallel` steps: is there a test verifying that branches run against isolated contexts (a branch cannot observe a sibling's write)?
+> 8. For `parallel` steps: is there a test verifying the aggregate is keyed by child step name and stored under the block's `output:` field?
+> 9. For `parallel` steps: is there a test verifying null appears in the aggregate for a switch branch or a condition-skipped branch?
+> 10. Is there a test in the loader suite verifying that `output:` on a parallel child throws `WorkflowDefinitionException`?
 >
 > **Replay safety regression tests:**
 > 7. Is there a test (or at minimum a comment) confirming that `WorkflowRunner` uses `context.NewGuid()` and not `Guid.NewGuid()`? This was flagged as a critical concern in the implementation review.

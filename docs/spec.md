@@ -78,7 +78,7 @@ Full instance ID format: `{parentInstanceId}:{stepName}:{resolvedSuffix}`
 
 `on-timeout` supports two values:
 - `fail` (default) — throw `WorkflowTimeoutException`; orchestration fails
-- `continue` — set step output to `null`; proceed to next step
+- `continue` — store **explicit null** under the step's output name and proceed. The null is always materialized (not a missing key), so `{{approval == null}}` in a downstream condition evaluates correctly regardless of whether the step ran sequentially or inside a parallel branch.
 
 Escalation patterns are composed using a `condition` on a subsequent step:
 
@@ -462,9 +462,13 @@ workflow:
 
 ### 5.7 Parallel Step
 
+A parallel block is a **fan-out/fan-in** construct. All branches launch concurrently from the same starting state and the block waits for all of them before continuing. Results are collected into a single aggregate object.
+
 ```yaml
 - name: Finalize
   type: parallel
+  output: finalize          # optional; stores the aggregate in parent context
+  condition: "{{...}}"      # optional; evaluated once before launching branches
   steps:
     - name: SendConfirmation
       activity: SendConfirmationEmailActivity
@@ -473,14 +477,39 @@ workflow:
       type: sub-orchestration
       workflow: LedgerUpdate
       input: "{{fulfillmentResults}}"
-  output: finalizeResults   # optional; receives object keyed by child step name
-  condition: "{{...}}"      # optional; evaluated before launching parallel steps
+    - name: NotifyWarehouse
+      type: wait-for-event
+      event: WarehouseAcknowledged
+      timeout: PT1H
+
+- name: Audit
+  activity: AuditActivity
+  input:
+    confirmation: "{{finalize.SendConfirmation}}"
+    confirmationId: "{{finalize.SendConfirmation.confirmationId}}"
+    approvedBy: "{{finalize.SendConfirmation.approvedBy}}"
 ```
 
-- Each step in `steps` runs concurrently via `Task.WhenAll`.
-- Named child steps write their outputs into the parent `WorkflowExecutionContext` after all complete.
-- `output` on the parallel block (if present) receives a `Dictionary<string, object?>` of all named child outputs.
-- Anonymous child steps (no `name`) may not be referenced later; their output is discarded.
+**Semantics:**
+
+- Each branch starts from a **snapshot** of the parent `WorkflowExecutionContext` at block-start. Branches cannot observe each other's writes while the block is running.
+- The block's `output:` field names where the aggregate object is stored in the parent context. If omitted, branches are awaited but results are not exposed to subsequent steps.
+- The aggregate is a JSON object keyed by **child step name**. Every named child step contributes an entry. **Null entries are always included** — they are never omitted.
+- `output:` on a child step inside a parallel block is a **load-time error** (`WorkflowDefinitionException`). Branch results are always keyed by step name; there is no per-child output alias.
+- Child step names must be unique within the block.
+- If any branch fails, the parallel block fails.
+
+**Branch result by step type** (value in the aggregate under the child's step name):
+
+| Child step type | Branch result |
+|---|---|
+| `activity` | Return value of the activity call |
+| `sub-orchestration` | Return value of the sub-orchestration |
+| `foreach` | Array of all iteration results |
+| `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
+| `switch` | `null` — switch routes execution and has no return value |
+| `parallel` (nested) | The nested block's aggregate object |
+| Any step with `condition: false` | `null` — the step was skipped |
 
 ### 5.8 Wait-for-Event Step
 
@@ -560,6 +589,7 @@ workflow:
 
     - name: Finalize
       type: parallel
+      output: finalize
       steps:
         - name: SendConfirmation
           activity: SendConfirmationEmailActivity
@@ -795,8 +825,11 @@ internal sealed class WorkflowExecutionContext
     public object? GetOutput(string name);
     public bool HasOutput(string name);
 
-    // Creates a child scope for foreach iterations
+    // Creates a child scope for foreach iterations carrying $item and $index
     public WorkflowExecutionContext CreateIterationScope(JsonElement item, int index);
+
+    // Creates an isolated snapshot scope for a parallel branch; branches cannot observe each other's writes
+    public WorkflowExecutionContext CreateParallelBranchScope();
 }
 
 // Engine/WorkflowDefinitionRegistry.cs (implements IWorkflowDefinitionRegistry)
@@ -822,9 +855,9 @@ internal static class ExpressionEvaluator
 }
 
 // Engine/WorkflowRunner.cs
-internal sealed class WorkflowRunner
+internal static class WorkflowRunner
 {
-    public Task RunAsync(
+    public static Task RunAsync(
         TaskOrchestrationContext context,
         WorkflowDefinition definition,
         WorkflowExecutionContext execCtx);
@@ -848,28 +881,30 @@ Throw `WorkflowDefinitionException` at startup (during `AddDeclarativeWorkflows`
 ### 8.2 `RunWorkflowAsync` Extension Method
 
 ```
-1. workflow = registry.Get(context.Name)  // throws if not found
-2. inputJson = context.GetInput<JsonElement>() ?? JsonElement (empty object)
-3. execCtx = new WorkflowExecutionContext(inputJson, context)
-4. runner = new WorkflowRunner()
-5. await runner.RunAsync(context, workflow, execCtx)
+1. Cast registry to IWorkflowDefinitionRegistryInternal (throws if wrong implementation)
+2. internalRegistry.TryGet(context.Name, out definition)  // throws WorkflowDefinitionException if not found
+3. inputJson = context.GetInput<JsonElement>()  // default(JsonElement) if no input
+4. execCtx = new WorkflowExecutionContext(inputJson, context)
+5. await WorkflowRunner.RunAsync(context, definition, execCtx)  // WorkflowRunner is static
 ```
 
 ### 8.3 `WorkflowRunner.RunAsync` — Step Dispatch
 
+Each dispatch method accepts an optional `outputNameOverride` used by `RunParallel` to store results under the child's step name instead of `step.Output`. Normal sequential execution passes no override.
+
+Output storage happens **inside** each dispatch method using `effectiveOutput = outputNameOverride ?? step.Output`. There is no post-dispatch storage step.
+
 ```
 For each step in definition.Steps:
   1. If step.Condition is set:
-       result = ExpressionEvaluator.EvaluateBool(step.Condition, execCtx)
-       if result == false: skip step (continue loop)
-  2. Dispatch by step.Type:
-       Activity          → DispatchActivity(context, step, execCtx)
-       SubOrchestration  → DispatchSubOrchestration(context, step, execCtx)
-       Foreach           → DispatchForeach(context, step, execCtx)
-       Parallel          → DispatchParallel(context, step, execCtx)
-       WaitForEvent      → DispatchWaitForEvent(context, step, execCtx)
-       Switch            → DispatchSwitch(context, step, execCtx)
-  3. If step.Output is set: execCtx.SetOutput(step.Output, result)
+       if !ExpressionEvaluator.EvaluateBool(step.Condition, execCtx): skip step
+  2. Dispatch by step.Type (each method handles its own output storage):
+       Activity          → RunActivity(context, step, execCtx)
+       SubOrchestration  → RunSubOrchestration(context, step, execCtx)
+       Foreach           → RunForeach(context, step, execCtx)
+       Parallel          → RunParallel(context, step, execCtx)
+       WaitForEvent      → RunWaitForEvent(context, step, execCtx)
+       Switch            → RunSwitch(context, step, execCtx)
 ```
 
 ### 8.4 Activity Dispatch
@@ -888,14 +923,15 @@ resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx)
 instanceIdSuffix = step.InstanceId != null
     ? ExpressionEvaluator.Evaluate(step.InstanceId, execCtx)?.ToString()
     : context.NewGuid().ToString()
-instanceId = $"{execCtx.InstanceId}:{step.Name}:{instanceIdSuffix}"
-retryPolicy = step.Retry?.ToSdkRetryPolicy()
-options = new SubOrchestrationOptions(retryPolicy) { InstanceId = instanceId }
+instanceId = $"{context.InstanceId}:{step.Name}:{instanceIdSuffix}"
+taskOptions = step.Retry != null ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()) : null
+options = new SubOrchestrationOptions(taskOptions, instanceId)  // (TaskOptions?, string) ctor
 result = await context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName, resolvedInput, options)
-return result
+effectiveOutput = outputNameOverride ?? step.Output
+if effectiveOutput != null: execCtx.SetOutput(effectiveOutput, result)
 ```
 
-`SubOrchestrationOptions` is from `Microsoft.DurableTask` and inherits `TaskOptions`, which carries the retry policy. Both instance ID and retry are set on the same options object — there is no positional `instanceId` overload and no separate `TaskOptions` for sub-orchestration calls.
+`SubOrchestrationOptions` constructor (verified via reflection on `Microsoft.DurableTask.Abstractions` 1.24.1): `(TaskOptions? options, string instanceId)`. There is NO record-style `(Retry: ..., InstanceId: ...)` named-parameter form — it does not compile. Pass null `TaskOptions` when no retry policy.
 
 ### 8.6 Foreach Dispatch
 
@@ -915,9 +951,9 @@ tasks = items.Select((item, index) =>
         instanceIdSuffix = step.InstanceId != null
             ? ExpressionEvaluator.Evaluate(step.InstanceId, iterCtx)?.ToString()
             : context.NewGuid().ToString()
-        instanceId = $"{execCtx.InstanceId}:{step.Name}:{instanceIdSuffix}"
-        retryPolicy = step.Retry?.ToSdkRetryPolicy()
-        options = new SubOrchestrationOptions(retryPolicy) { InstanceId = instanceId }
+        instanceId = $"{context.InstanceId}:{step.Name}:{instanceIdSuffix}"
+        taskOptions = step.Retry != null ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()) : null
+        options = new SubOrchestrationOptions(taskOptions, instanceId)
         return context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName, resolvedInput, options)
 })
 
@@ -929,26 +965,30 @@ If `source` does not evaluate to a JSON array: throw `WorkflowExpressionExceptio
 
 ### 8.7 Parallel Dispatch
 
+Each branch runs against an isolated snapshot of the parent context. The step name is the implicit output key — `output:` on a child step is a validation error caught by the loader, never seen here.
+
 ```
-tasks = step.Steps.Select(childStep =>
-    DispatchStep(context, childStep, execCtx)  // reuses main dispatch logic
+// Fork one snapshot context per branch
+branchScopes = step.Steps.Select(_ => execCtx.CreateParallelBranchScope())
+
+// Dispatch each child with its step name as the output key override
+tasks = step.Steps.Select((child, i) =>
+    ExecuteStep(context, child, branchScopes[i], outputNameOverride: child.Name)
 )
-results = await Task.WhenAll(tasks)
+await Task.WhenAll(tasks)
 
-// Write named child outputs into execCtx
-for (childStep, result) in zip(step.Steps, results):
-    if childStep.Output != null:
-        execCtx.SetOutput(childStep.Output, result)
-
+// Build aggregate only if the block declared an output
 if step.Output != null:
-    outputDict = step.Steps
-        .Where(s => s.Name != null)
-        .Zip(results)
-        .ToDictionary(x => x.First.Name!, x => x.Second)
-    return outputDict
-
-return null
+    aggregate = {}
+    for (child, branchScope) in zip(step.Steps, branchScopes):
+        if child.Name != null:
+            aggregate[child.Name] = branchScope.HasOutput(child.Name)
+                ? branchScope.GetOutput(child.Name)
+                : null   // null for switch, skipped condition, timeout-continue — always present
+    execCtx.SetOutput(step.Output, JsonSerializer.SerializeToElement(aggregate))
 ```
+
+`outputNameOverride` propagates through `ExecuteStep` to whichever dispatch method handles the child (Activity, SubOrchestration, Foreach, WaitForEvent, nested Parallel). Each method uses `effectiveOutput = outputNameOverride ?? step.Output` when deciding where to store its result. Switch does not store a result regardless.
 
 ### 8.8 WaitForEvent Dispatch
 
@@ -1011,6 +1051,7 @@ Validation rules (throw `WorkflowDefinitionException` for any violation):
 8. `retry.maxAttempts` must be >= 1 if present.
 9. `on-timeout` must be `fail` or `continue` if present.
 10. Step `name` must be unique within a workflow (across all nesting levels — warn but do not throw if duplicate names exist in different parallel/switch branches).
+11. A child step inside a `parallel` block must not declare `output:`. Throw `WorkflowDefinitionException` at load time with a message explaining that branch results are keyed by step name and collected via the block's own `output:` field.
 
 ISO 8601 duration parsing: use a helper that converts `PT5S` → `TimeSpan.FromSeconds(5)`, `P7D` → `TimeSpan.FromDays(7)`, etc. Standard .NET does not parse ISO 8601 durations natively; implement a minimal parser (only `P`, `D`, `H`, `M`, `S` components needed).
 
@@ -1068,9 +1109,12 @@ Cover all expression forms in §6.2. Key cases:
 | Condition: false | `{{input.total > 10}}` | `{"total":5}` | `false` |
 | Condition: equality | `{{input.region == "EU"}}` | `{"region":"EU"}` | `true` |
 | Condition: AND | `{{input.a > 0 && input.b != null}}` | `{"a":1,"b":"x"}` | `true` |
-| Condition: missing property | `{{input.missing > 0}}` | `{}` | `false` (null is falsy) |
+| Condition: missing property in comparison | `{{input.missing > 0}}` | `{}` | `false` (null is falsy) |
+| Condition: bare path — unset variable | `EvaluateBool("{{approval}}", ctx)` where `approval` not in context | `false` — must NOT throw |
+| Condition: bare path — missing property | `EvaluateBool("{{input.optionalFlag}}", ctx)` where field absent | `false` — must NOT throw |
 | Built-in instanceId | `{{orchestration.instanceId}}` | n/a | the context's instance ID string |
 | Step output reference | `{{stepA.result}}` | stepA output = `{"result":99}` | `99` |
+| Input expression — unset variable throws | `Evaluate("{{missing}}", ctx)` where `missing` not in context | `WorkflowExpressionException` thrown (non-condition path must not swallow errors) |
 
 ### 9.2 WorkflowDefinitionLoaderTests
 
@@ -1086,6 +1130,7 @@ Cover all expression forms in §6.2. Key cases:
 | Foreach with both activity+workflow | both present | `WorkflowDefinitionException` |
 | Valid `on-timeout` values | `fail`, `continue` | parses correctly |
 | Invalid `on-timeout` value | `escalate` | `WorkflowDefinitionException` |
+| Parallel child with `output:` | child step declares `output: foo` inside parallel | `WorkflowDefinitionException` at load time |
 
 ### 9.3 WorkflowRunnerTests
 
@@ -1101,10 +1146,14 @@ Mock `TaskOrchestrationContext` with NSubstitute. Set up `context.Name` to retur
 | Foreach over activity | `CallActivityAsync` called N times (once per item); results collected in order |
 | Foreach instance IDs — YAML prescribed | `instanceId: "{{$item.id}}"` → ID suffix is item's id field |
 | Foreach instance IDs — default | no `instanceId` field → ID suffix is `context.NewGuid()` |
-| Parallel block | All child steps called; results merged into parent context |
+| Parallel — isolated branches | Branch cannot read a sibling's output; each runs against its own snapshot context |
+| Parallel — aggregate output | Block's `output:` receives JSON object keyed by child step name |
+| Parallel — null in aggregate | Switch branch and condition-skipped branch appear as null in aggregate, not missing |
+| Parallel — nested parallel | Nested block's aggregate is the branch result of the outer parallel entry |
 | WaitForEvent — event fires | Returns event payload; timer cancelled |
 | WaitForEvent — timeout fail | `WorkflowTimeoutException` thrown |
-| WaitForEvent — timeout continue | Step output is null; next step runs |
+| WaitForEvent — timeout continue (sequential) | Output stored as explicit null; downstream `{{approval == null}}` is true |
+| WaitForEvent — timeout continue (parallel branch) | Null appears in aggregate under branch's step name |
 | Switch — matching case | Correct case steps executed |
 | Switch — default case | Default steps executed when no key matches |
 | Switch — no match, no default | No steps executed; no error |

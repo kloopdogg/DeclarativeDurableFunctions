@@ -87,11 +87,14 @@ The model: **steps run sequentially by default**. Explicit `type:` values handle
   output: fulfillmentResults
 ```
 
-### 5. Parallel block (mixed step types)
+### 5. Parallel block (fan-out/fan-in)
+
+A parallel block launches all child steps concurrently from the same starting state and waits for all of them before continuing. It is a fan-in construct: child results are collected into a single aggregate object exposed to downstream steps.
 
 ```yaml
 - name: Finalize
   type: parallel
+  output: finalize
   steps:
     - name: SendConfirmation
       activity: SendConfirmationEmailActivity
@@ -104,6 +107,41 @@ The model: **steps run sequentially by default**. Explicit `type:` values handle
       type: wait-for-event
       event: WarehouseAcknowledged
       timeout: PT1H
+
+- name: Audit
+  activity: AuditActivity
+  input:
+    confirmation: "{{finalize.SendConfirmation}}"
+    ledger: "{{finalize.UpdateLedger}}"
+```
+
+**Parallel block semantics:**
+
+- Each branch starts from a **snapshot** of the parent context at block-start. Branches cannot observe each other's outputs while running.
+- The block's `output:` field names where the aggregate result object is stored in the parent context. If omitted, branch results are awaited but not exposed.
+- The aggregate is an object keyed by **child step name**. Every named child step contributes an entry. Null entries are always included — they are never omitted.
+- `output:` on a child step inside a parallel block is a **load-time error**. Branch results are always keyed by step name; there is no per-child output alias.
+- Child step names must be unique within the block.
+- If any branch fails, the parallel block fails.
+
+**Branch result by step type** (what goes into the aggregate under the child's step name):
+
+| Child step type | Branch result |
+|---|---|
+| `activity` | Return value of the activity call |
+| `sub-orchestration` | Return value of the sub-orchestration |
+| `foreach` | Array of all iteration results |
+| `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
+| `switch` | `null` — switch routes execution and has no return value |
+| `parallel` (nested) | The nested block's aggregate object |
+| Any step with `condition: false` | `null` — the step was skipped |
+
+Nested path traversal works naturally. If `SendConfirmation` returns `{ "confirmationId": 123, "approvedBy": "James Scott" }`:
+
+```yaml
+input:
+  id: "{{finalize.SendConfirmation.confirmationId}}"
+  approver: "{{finalize.SendConfirmation.approvedBy}}"
 ```
 
 ### 6. External event wait (human approval / external agent)
