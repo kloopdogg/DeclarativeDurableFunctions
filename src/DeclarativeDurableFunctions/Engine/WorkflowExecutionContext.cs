@@ -5,17 +5,53 @@ namespace DeclarativeDurableFunctions.Engine;
 
 internal sealed class WorkflowExecutionContext
 {
+    private readonly Dictionary<string, object?> _outputs;
+
     public WorkflowExecutionContext(JsonElement input, TaskOrchestrationContext orchestrationContext)
-        => throw new NotImplementedException();
+    {
+        Input = input;
+        InstanceId = orchestrationContext.InstanceId;
+        ParentInstanceId = orchestrationContext.Parent?.InstanceId;
+        _outputs = new Dictionary<string, object?>(StringComparer.Ordinal);
+        IterationItem = null;
+        IterationIndex = null;
+    }
+
+    private WorkflowExecutionContext(
+        JsonElement input,
+        string instanceId,
+        string? parentInstanceId,
+        Dictionary<string, object?> outputs,
+        JsonElement iterationItem,
+        int iterationIndex)
+    {
+        Input = input;
+        InstanceId = instanceId;
+        ParentInstanceId = parentInstanceId;
+        _outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
+        IterationItem = iterationItem;
+        IterationIndex = iterationIndex;
+    }
 
     public JsonElement Input { get; }
-    public string InstanceId { get; } = string.Empty;
+    public string InstanceId { get; }
     public string? ParentInstanceId { get; }
 
-    public void SetOutput(string name, object? value) => throw new NotImplementedException();
-    public object? GetOutput(string name) => throw new NotImplementedException();
-    public bool HasOutput(string name) => throw new NotImplementedException();
+    public JsonElement? IterationItem { get; }
+    public int? IterationIndex { get; }
+
+    public void SetOutput(string name, object? value)
+    {
+        if (value is JsonElement element)
+            _outputs[name] = element.Clone();
+        else
+            _outputs[name] = value;
+    }
+
+    public object? GetOutput(string name) => _outputs[name];
+
+    public bool HasOutput(string name) => _outputs.ContainsKey(name);
 
     public WorkflowExecutionContext CreateIterationScope(JsonElement item, int index)
-        => throw new NotImplementedException();
+        => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs, item, index);
 }
