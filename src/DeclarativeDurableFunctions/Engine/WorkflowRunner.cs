@@ -84,10 +84,9 @@ internal static class WorkflowRunner
 
     private static SubOrchestrationOptions BuildSubOrchOptions(StepDefinition step, string instanceId)
     {
-        var options = step.Retry != null
-            ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy())
-            : null;
-        return new SubOrchestrationOptions(options!, instanceId);
+        if (step.Retry != null)
+            return TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()).WithInstanceId(instanceId);
+        return new SubOrchestrationOptions(retry: null, instanceId: instanceId);
     }
 
     private static string BuildInstanceId(
