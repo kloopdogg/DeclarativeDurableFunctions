@@ -1,0 +1,7 @@
+workflow:
+  name: Fulfill Line Item
+  steps:
+    - name: FulfillItem
+      activity: FulfillLineItemActivity
+      input: "{{input}}"
+      output: result

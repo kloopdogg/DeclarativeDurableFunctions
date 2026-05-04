@@ -44,7 +44,7 @@ Your orchestrator function becomes a stub:
 public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
 {
     [Function("OrderFulfillment")]
-    public Task RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
+    public Task<JsonElement> RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
         => context.RunWorkflowAsync(registry);
 }
 ```
@@ -60,9 +60,89 @@ public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
 - Conditional steps and switch/case routing
 - Any combination of the above, nested arbitrarily
 
+## Install
+
+```bash
+dotnet add package DeclarativeDurableFunctions --version 0.1.0-alpha
+```
+
+## Quickstart
+
+**1. Add your workflow YAML** to a `Workflows/` folder in your Azure Functions project:
+
+```yaml
+# Workflows/OrderFulfillment.yaml
+workflow:
+  name: Order Fulfillment
+  steps:
+    - name: ValidateOrder
+      activity: ValidateOrderActivity
+      input: "{{input}}"
+      output: validation
+
+    - name: FulfillLineItems
+      type: foreach
+      source: "{{input.lineItems}}"
+      workflow: FulfillLineItem
+      input:
+        parent:
+          orchestrationId: "{{orchestration.instanceId}}"
+          correlationId: "{{input.correlationId}}"
+        data: "{{$item}}"
+      instanceId: "{{$item.lineItemId}}"
+      output: fulfillmentResults
+
+    - name: WaitForApproval
+      type: wait-for-event
+      event: OrderApproved
+      timeout: P7D
+      on-timeout: continue
+      output: approval
+
+    - name: Finalize
+      type: parallel
+      output: finalize
+      steps:
+        - name: SendConfirmation
+          activity: SendConfirmationEmailActivity
+          input: "{{input.customerEmail}}"
+        - name: UpdateLedger
+          activity: UpdateLedgerActivity
+          input: "{{fulfillmentResults}}"
+```
+
+**2. Register the engine** in `Program.cs`:
+
+```csharp
+var host = new HostBuilder()
+    .ConfigureFunctionsWorkerDefaults()
+    .ConfigureServices(services =>
+    {
+        services.AddDeclarativeWorkflows(); // loads Workflows/*.yaml at startup
+    })
+    .Build();
+
+await host.RunAsync();
+```
+
+**3. Write a one-line orchestrator stub:**
+
+```csharp
+public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
+{
+    [Function("OrderFulfillment")]
+    public Task<JsonElement> RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
+        => context.RunWorkflowAsync(registry);
+}
+```
+
+That's it. Write your activity functions normally — the YAML drives the orchestration.
+
+See [`src/DeclarativeDurableFunctions.TestApp`](src/DeclarativeDurableFunctions.TestApp) for a complete working example.
+
 ## Status
 
-Early design phase. See [`docs/vision.md`](docs/vision.md) for the full design including schema reference, expression language, engine architecture, and the input envelope convention.
+**Alpha.** Core engine is complete with full test coverage. All six step types are implemented: activity, sub-orchestration, foreach, parallel, wait-for-event, and switch. See [`docs/vision.md`](docs/vision.md) for the full design including schema reference, expression language, and engine architecture.
 
 ## Target platform
 

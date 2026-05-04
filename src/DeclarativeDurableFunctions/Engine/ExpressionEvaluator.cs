@@ -150,7 +150,7 @@ internal static class ExpressionEvaluator
                 throw new WorkflowExpressionException(
                     expr, $"Cannot access property '{segments[i]}' on a non-object");
             }
-            if (!element.TryGetProperty(segments[i], out var child))
+            if (!TryGetProperty(element, segments[i], out var child))
             {
                 if (isCondition) return null;
                 var path = string.Join(".", segments[..i]);
@@ -160,6 +160,22 @@ internal static class ExpressionEvaluator
             element = child;
         }
         return UnboxJsonElement(element);
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.TryGetProperty(name, out value))
+            return true;
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
+                return true;
+            }
+        }
+        value = default;
+        return false;
     }
 
     private static object? UnboxJsonElement(JsonElement el) => el.ValueKind switch

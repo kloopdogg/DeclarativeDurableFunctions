@@ -6,6 +6,11 @@
     <LangVersion>latest</LangVersion>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <PackageId>DeclarativeDurableFunctions</PackageId>
+    <Version>0.1.0-alpha</Version>
+    <Description>A declarative YAML layer for Azure Durable Functions. Describe your workflow in YAML — never write an orchestrator function again.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Authors>Scott Klueppel</Authors>
+    <PackageTags>azure;durable-functions;workflow;yaml;orchestration</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

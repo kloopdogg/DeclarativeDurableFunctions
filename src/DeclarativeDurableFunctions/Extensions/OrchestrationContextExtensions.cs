@@ -7,7 +7,7 @@ namespace DeclarativeDurableFunctions.Extensions;
 
 public static class OrchestrationContextExtensions
 {
-    public static Task RunWorkflowAsync(
+    public static Task<JsonElement> RunWorkflowAsync(
         this TaskOrchestrationContext context,
         IWorkflowDefinitionRegistry registry)
     {
