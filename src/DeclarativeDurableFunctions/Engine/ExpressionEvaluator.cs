@@ -150,7 +150,7 @@ internal static class ExpressionEvaluator
                 throw new WorkflowExpressionException(
                     expr, $"Cannot access property '{segments[i]}' on a non-object");
             }
-            if (!element.TryGetProperty(segments[i], out var child))
+            if (!TryGetProperty(element, segments[i], out var child))
             {
                 if (isCondition) return null;
                 var path = string.Join(".", segments[..i]);
@@ -160,6 +160,22 @@ internal static class ExpressionEvaluator
             element = child;
         }
         return UnboxJsonElement(element);
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.TryGetProperty(name, out value))
+            return true;
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
+                return true;
+            }
+        }
+        value = default;
+        return false;
     }
 
     private static object? UnboxJsonElement(JsonElement el) => el.ValueKind switch
@@ -259,10 +275,14 @@ internal static class ExpressionEvaluator
         _ => true
     };
 
-    private static string Stringify(object? value) => value switch
+    internal static string Stringify(object? value) => value switch
     {
-        null       => "",
+        null => "",
+        bool b => b ? "true" : "false",
         JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString() ?? "",
+        JsonElement je when je.ValueKind == JsonValueKind.Null   => "",
+        JsonElement je when je.ValueKind == JsonValueKind.True   => "true",
+        JsonElement je when je.ValueKind == JsonValueKind.False  => "false",
         JsonElement je => je.ToString(),
         _ => value.ToString() ?? ""
     };
@@ -299,11 +319,12 @@ internal sealed class ExprLexer(string text)
 
         var c = text[_pos];
 
-        if (c == '"')
+        if (c == '"' || c == '\'')
         {
+            var quote = c;
             _pos++;
             var sb = new System.Text.StringBuilder();
-            while (_pos < text.Length && text[_pos] != '"')
+            while (_pos < text.Length && text[_pos] != quote)
             {
                 if (text[_pos] == '\\' && _pos + 1 < text.Length)
                 {

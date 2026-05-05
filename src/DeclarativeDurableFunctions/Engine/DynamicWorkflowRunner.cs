@@ -1,11 +1,17 @@
 using System.Text.Json;
 using DeclarativeDurableFunctions.Exceptions;
+using DeclarativeDurableFunctions.Extensions;
 using DeclarativeDurableFunctions.Models;
 using Microsoft.DurableTask;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal static class WorkflowRunner
+/// <summary>
+/// Identical to WorkflowRunner except sub-orchestration steps are always dispatched to the
+/// single GenericSubOrchestration function, with the workflow name passed in the input envelope.
+/// Use via context.RunWorkflowDynamicAsync(registry) — no named stub per workflow required.
+/// </summary>
+internal static class DynamicWorkflowRunner
 {
     public static async Task<JsonElement> RunAsync(
         TaskOrchestrationContext context,
@@ -25,8 +31,6 @@ internal static class WorkflowRunner
             await ExecuteStep(context, step, execCtx);
     }
 
-    // outputNameOverride: used by parallel branches to store the result under the child's step name
-    // rather than its output: field. Null means use step.Output as normal.
     private static async Task ExecuteStep(
         TaskOrchestrationContext context,
         StepDefinition step,
@@ -69,7 +73,7 @@ internal static class WorkflowRunner
             ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy())
             : null;
 
-    // ---- SubOrchestration ----
+    // ---- SubOrchestration (routes through GenericSubOrchestration) ----
 
     private static async Task RunSubOrchestration(
         TaskOrchestrationContext context,
@@ -80,7 +84,10 @@ internal static class WorkflowRunner
         var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
         var instanceId = BuildInstanceId(context, step, execCtx);
         var options = BuildSubOrchOptions(step, instanceId);
-        var result = await context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName!, resolvedInput, options);
+        var result = await context.CallSubOrchestratorAsync<JsonElement>(
+            DynamicOrchestrationContextExtensions.GenericSubOrchestrationFunctionName,
+            WrapSubOrchInput(step.WorkflowName!, resolvedInput),
+            options);
         var effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
             execCtx.SetOutput(effectiveOutput, result);
@@ -128,7 +135,6 @@ internal static class WorkflowRunner
         }
 
         var results = await Task.WhenAll(tasks);
-
         var effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
             execCtx.SetOutput(effectiveOutput, JsonSerializer.SerializeToElement(results));
@@ -140,8 +146,7 @@ internal static class WorkflowRunner
         WorkflowExecutionContext iterCtx)
     {
         var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
-        var options = BuildActivityOptions(step);
-        return context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput, options);
+        return context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput, BuildActivityOptions(step));
     }
 
     private static Task<JsonElement> DispatchForeachSubOrch(
@@ -151,8 +156,10 @@ internal static class WorkflowRunner
     {
         var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
         var instanceId = BuildInstanceId(context, step, iterCtx);
-        var options = BuildSubOrchOptions(step, instanceId);
-        return context.CallSubOrchestratorAsync<JsonElement>(step.WorkflowName!, resolvedInput, options);
+        return context.CallSubOrchestratorAsync<JsonElement>(
+            DynamicOrchestrationContextExtensions.GenericSubOrchestrationFunctionName,
+            WrapSubOrchInput(step.WorkflowName!, resolvedInput),
+            BuildSubOrchOptions(step, instanceId));
     }
 
     // ---- Parallel ----
@@ -163,8 +170,6 @@ internal static class WorkflowRunner
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        // Each branch gets a snapshot of the parent context so branches cannot observe
-        // each other's in-flight outputs. The step name is the implicit output key.
         var branchScopes = step.Steps.Select(_ => execCtx.CreateParallelBranchScope()).ToList();
         var tasks = step.Steps
             .Select((child, i) => ExecuteStep(context, child, branchScopes[i], outputNameOverride: child.Name))
@@ -224,8 +229,6 @@ internal static class WorkflowRunner
         if (step.OnTimeout == "fail")
             throw new WorkflowTimeoutException(step.Name ?? "(unnamed)", step.Timeout);
 
-        // on-timeout: continue → materialize explicit null so downstream references see null
-        // rather than a missing-key error, whether this step ran sequentially or inside a parallel branch.
         var effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
         if (effectiveOutputOnTimeout != null)
             execCtx.SetOutput(effectiveOutputOnTimeout, null);
@@ -261,10 +264,7 @@ internal static class WorkflowRunner
 
         var effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
-        {
-            object? outputValue = result.ValueKind == System.Text.Json.JsonValueKind.Null ? null : result;
-            execCtx.SetOutput(effectiveOutput, outputValue);
-        }
+            execCtx.SetOutput(effectiveOutput, result);
     }
 
     // ---- Switch ----
@@ -283,5 +283,10 @@ internal static class WorkflowRunner
         if (caseSteps != null)
             await ExecuteSteps(context, caseSteps, execCtx);
     }
+
+    // ---- Helpers ----
+
+    private static Dictionary<string, object?> WrapSubOrchInput(string workflowName, object? input)
+        => new() { ["__workflow"] = workflowName, ["__input"] = input };
 
 }

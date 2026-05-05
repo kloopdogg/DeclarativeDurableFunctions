@@ -1,5 +1,7 @@
 # Vision: Declarative Durable Functions
 
+CROW = Composable Runtime for Orchestrated Workflows
+
 ## The Problem
 
 Azure Durable Functions are powerful — stateful, reliable, long-running workflows in a serverless environment. But the orchestrator function code is notoriously painful to write and read. The `await context.CallActivityAsync(...)` boilerplate, the replay constraints, the ceremony around fan-out/fan-in and external events — all of it turns developers off and keeps them from adopting Durable Functions at all.
@@ -132,6 +134,7 @@ A parallel block launches all child steps concurrently from the same starting st
 | `sub-orchestration` | Return value of the sub-orchestration |
 | `foreach` | Array of all iteration results |
 | `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
+| `poll` | Last activity result satisfying `until`; `null` if `on-timeout: continue` fires |
 | `switch` | `null` — switch routes execution and has no return value |
 | `parallel` (nested) | The nested block's aggregate object |
 | Any step with `condition: false` | `null` — the step was skipped |
@@ -183,9 +186,35 @@ Switch/case for routing:
       - activity: RouteToGlobalFulfillmentActivity
 ```
 
-### 8. Combinations
+### 8. Polling loop
 
-All of the above compose freely. A `parallel` block can contain `foreach` steps. A `foreach` can invoke a sub-orchestration that itself has a `wait-for-event`. Any nesting depth.
+Repeatedly calls an activity until a condition is met or a timeout expires. Implemented internally as a sub-orchestration that calls `ContinueAsNew` after each failed check to keep history manageable.
+
+```yaml
+- name: WaitForCompletion
+  type: poll
+  activity: CheckStatusActivity
+  input: "{{input.correlationId}}"
+  output: statusResult
+  until: "{{statusResult.status == 'Complete'}}"
+  delay: PT100M
+  timeout: PT30D
+  on-timeout: fail        # fail (default) | continue
+```
+
+**Poll semantics:**
+
+- The activity is called with the resolved `input` on every iteration.
+- After each call, the result is bound to the step's `output` name and the `until` expression is evaluated against it.
+- If `until` is true, the step completes and the result is stored in the parent context under `output`.
+- If `until` is false and the wall-clock `timeout` has not elapsed, the engine sleeps for `delay` (ISO 8601 duration) then retries via `ContinueAsNew`.
+- If `timeout` elapses: `on-timeout: fail` (default) throws and fails the orchestration; `on-timeout: continue` stores the last activity result (which may be `null`) and proceeds.
+- `ContinueAsNew` resets the orchestration history on each iteration — required for long polling windows (e.g., `PT30D`) where unbounded history growth would otherwise occur.
+- The `until` expression has full access to the expression language: comparisons, logical operators, null checks, nested property access.
+
+### 9. Combinations
+
+All of the above compose freely. A `parallel` block can contain `foreach` steps. A `foreach` can invoke a sub-orchestration that itself has a `wait-for-event`. A `poll` step can appear inside a `parallel` block. Any nesting depth.
 
 ---
 
@@ -274,6 +303,7 @@ WorkflowRunner
     Parallel         → steps.Select(s => Dispatch(s)) → Task.WhenAll
     WaitForEvent     → context.WaitForExternalEvent<JsonElement>(name) raced against timer
     Switch           → evaluate expression → walk matching case steps
+    Poll             → built-in DeclarativeWorkflowPoller sub-orchestration: call activity → evaluate until → ContinueAsNew with delay, or return
 
 WorkflowExecutionContext
   Carries resolved step outputs by name.

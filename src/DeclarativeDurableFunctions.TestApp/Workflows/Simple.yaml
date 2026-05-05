@@ -1,0 +1,8 @@
+workflow:
+  name: Send Notification
+  steps:
+
+    - name: NotifyTeam
+      activity: SendTelegramMessageActivity
+      input: "Testing: 1, 2, 3"
+      output: teamNotification

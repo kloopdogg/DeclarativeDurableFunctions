@@ -237,10 +237,25 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
-    public void EvaluateBool_Equality_True()
+    public void EvaluateBool_Equality_DoubleQuotedString_True()
     {
         var ctx = MakeCtx(inputJson: """{"region":"EU"}""");
         Assert.True(ExpressionEvaluator.EvaluateBool("""{{input.region == "EU"}}""", ctx));
+    }
+
+    [Fact]
+    public void EvaluateBool_Equality_SingleQuotedString_True()
+    {
+        // Single-quoted strings are valid inside expressions when the YAML value is double-quoted
+        var ctx = MakeCtx(inputJson: """{"status":"Schedule Found"}""");
+        Assert.True(ExpressionEvaluator.EvaluateBool("{{input.status == 'Schedule Found'}}", ctx));
+    }
+
+    [Fact]
+    public void EvaluateBool_Equality_SingleQuotedString_False()
+    {
+        var ctx = MakeCtx(inputJson: """{"status":"Pending"}""");
+        Assert.False(ExpressionEvaluator.EvaluateBool("{{input.status == 'Schedule Found'}}", ctx));
     }
 
     [Fact]

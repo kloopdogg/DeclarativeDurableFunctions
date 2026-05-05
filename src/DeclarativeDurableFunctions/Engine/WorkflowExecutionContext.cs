@@ -66,6 +66,8 @@ internal sealed class WorkflowExecutionContext
 
     public bool HasOutput(string name) => _outputs.ContainsKey(name);
 
+    public IReadOnlyDictionary<string, object?> Outputs => _outputs;
+
     public WorkflowExecutionContext CreateIterationScope(JsonElement item, int index)
         => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs, item, index);
 
