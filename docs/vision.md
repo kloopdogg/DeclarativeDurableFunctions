@@ -10,18 +10,7 @@ Azure Durable Functions are powerful — stateful, reliable, long-running workfl
 
 A NuGet package that puts a declarative YAML layer on top of Durable Functions. Developers still write all their activity functions in C# (or Python or JS). They never write an orchestrator function again. Instead, a YAML file describes *what* the workflow does, and the framework drives the Durable Functions runtime underneath.
 
-The orchestrator becomes a one-liner:
-
-```csharp
-public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
-{
-    [Function("OrderFulfillment")]
-    public Task RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
-        => context.RunWorkflowAsync(registry);
-}
-```
-
-Everything else lives in YAML.
+Everything lives in YAML.
 
 ---
 
@@ -317,11 +306,82 @@ ExpressionEvaluator
 
 ---
 
+## Workflow Versioning
+
+### Why versioning is non-negotiable
+
+Durable Functions uses event sourcing: every action an orchestrator takes is recorded as a history event in Azure Storage. When an orchestration resumes after a wait — or after a system restart — the runtime **replays** the orchestrator function from the beginning, using stored history to short-circuit already-completed steps without re-executing them. This means the YAML definition must produce exactly the same sequence of Durable calls on replay as it did on first run. If the YAML has changed between start and replay — steps added, removed, or reordered — the replay produces a different call sequence, causing non-determinism errors or silently wrong behavior.
+
+The YAML file is effectively the orchestrator code. The same rules apply.
+
+### File naming and the version field
+
+Each YAML file carries an explicit version number:
+
+```yaml
+# OrderFulfillment-v2.yaml
+workflow:
+  name: Order Fulfillment
+  version: 2
+  steps:
+    ...
+```
+
+File naming convention: `WorkflowName-vN.yaml`. The base name is derived from the file name by stripping the `-vN` suffix. The `version:` field inside the YAML is the source of truth for the integer; omitting it defaults to `1`. The `name:` field is a human-readable display name only and does not affect registry lookups.
+
+### How version pinning works
+
+When a new orchestration instance is scheduled (e.g., via `POST /api/workflows/OrderFulfillment`), the framework resolves the workflow name to its current latest versioned form — `"OrderFulfillment:v2"` — and stores that versioned name in the Durable instance's input envelope in Azure Storage. From that moment forward, every replay of that instance reads its versioned name from its own storage record and looks up the correct definition, regardless of how many newer versions have been deployed.
+
+**The version is pinned at scheduling time, not at replay time.**
+
+### Registry key format
+
+Versioned names use the colon convention: `"WorkflowName:vN"` (e.g., `"OrderFulfillment:v2"`). When starting a workflow without a version specifier, the framework resolves to the latest registered version and pins it. All versions present on disk are registered simultaneously; the "latest" tracking is only used for new instance scheduling — never during replay.
+
+### Sub-orchestration versioning
+
+Sub-orchestrations get identical treatment. When a parent orchestration dispatches a sub-orchestration step (`workflow: FulfillLineItem`), the framework resolves `"FulfillLineItem"` to `"FulfillLineItem:v1"` (the current latest) at the moment `CallSubOrchestratorAsync` is called. Durable writes two things to Azure Storage at that moment:
+
+1. A `SubOrchestrationStarted` event in the **parent's** history — recording that a sub-orchestration with a specific instance ID was scheduled
+2. A new **sub-orchestration instance record** with its own input: `{ "__workflow": "FulfillLineItem:v1", ... }`
+
+The sub-orchestration's versioned name is baked into its own input record. If the host restarts while the sub-orchestration is itself mid-flight — parked on its own `wait-for-event` — Durable resumes it as a fully independent instance, reads `"FulfillLineItem:v1"` from its own input, and replays against the v1 definition. The parent's version and the sub-orchestration's version are completely independent.
+
+### Real-world scenario: parent at v1, sub-orchestration updated to v3
+
+Consider a 10-step `OrderFulfillment:v1` that dispatches a `FulfillLineItem` sub-orchestration at step 3, then parks at a human-approval `wait-for-event` at step 8. While it's parked, `FulfillLineItem` is deployed to v2, then v3.
+
+After a system restart:
+
+- The parent's instance input still says `"__workflow": "OrderFulfillment:v1"` — replays against v1 ✅
+- Step 3 (the sub-orchestration dispatch) was already recorded as completed in the parent's history. The replay short-circuits it and returns the stored result without touching the sub-orchestration's instance at all ✅
+- Step 8 (the wait-for-event) is still pending — re-created correctly ✅
+- `FulfillLineItem-v1.yaml` is still on disk and still registered, so if the sub-orchestration were itself still mid-flight, it would also replay correctly against v1 ✅
+
+If instead the sub-orchestration was also still waiting (parked on its own internal wait step):
+
+- Durable holds two separate pending instance records in storage
+- Each reads its own `__workflow` value from its own input envelope
+- Each replays independently against its own pinned version
+- The parent never needs to know what version the sub-orchestration is running — it only sees the completed result
+
+### The append-only constraint
+
+YAML files are **effectively append-only** while instances referencing them are alive. You can deploy `FulfillLineItem-v3.yaml`, but you cannot remove `FulfillLineItem-v1.yaml` until every instance pinned to v1 has completed or been terminated. All version files are loaded into the registry at host startup; a missing version file for a live instance will cause that instance's replay to fail.
+
+For the file-based registry this is an operational discipline constraint — enforced by awareness rather than tooling. For an Azure Blob Storage registry, it is automatic: blobs persist until explicitly deleted, so old versions remain retrievable indefinitely even after newer versions are deployed.
+
+### The narrow race condition
+
+There is one thin window: if the host crashes after an orchestrator decides to schedule a sub-orchestration but before Durable finishes writing the `SubOrchestrationStarted` history event to storage, that scheduling step will replay on the next host start. On replay, the framework re-resolves the workflow name from the registry and may now get a newer version than on the original run. This is the same non-determinism window that exists in any Durable Functions orchestrator when code changes while events are in flight — not specific to this framework. The only ironclad protection is draining in-flight instances before deploying new versions.
+
+---
+
 ## What Developers Still Write
 
 - **Activity functions** — all business logic lives here, in C#/Python/JS as normal
 - **Trigger functions** — HTTP, Service Bus, Timer, etc. that start orchestrations (may also be generated by the framework eventually)
-- **The orchestrator stub** — a one-liner that calls `context.RunWorkflowAsync(registry)`
 
 They never write orchestrator logic again.
 
