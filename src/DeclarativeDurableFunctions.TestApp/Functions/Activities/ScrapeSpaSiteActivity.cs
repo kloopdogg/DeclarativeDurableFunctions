@@ -22,13 +22,15 @@ public class ScrapeSpaSiteActivity
         return new
         {
             siteName = "USA Hockey Nationals Schedule 2026",
-            status = "Schedule Found",
+            status = "Succeeded",
             gamesScheduled = new[]
             {
                 new { date = "2026-01-01", teams = "Away vs MN Lakers" },
                 new { date = "2026-01-02", teams = "Home vs ID Steelheads" },
                 new { date = "2026-01-03", teams = "Home vs CO Eagles" },
             },
+            // status = "Failed,
+            // gamesScheduled = Array.Empty<object>(),
         };
     }
 }

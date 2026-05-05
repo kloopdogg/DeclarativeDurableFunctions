@@ -527,6 +527,185 @@ public class WorkflowRunnerTests
             Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>());
     }
 
+    // ---- Poll ----
+
+    [Fact]
+    public async Task Poll_DispatchesToDeclarativePoller()
+    {
+        var (context, execCtx) = MakeContext();
+        TaskName? capturedName = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedName = callInfo.ArgAt<TaskName>(0);
+                return Task.FromResult(Json("""{"status":"Complete"}"""));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult.status == 'Complete'}}",
+            Delay = "PT30S"
+        }), execCtx);
+
+        Assert.Equal(DeclarativePollerOrchestrator.FunctionName, capturedName?.Name);
+    }
+
+    [Fact]
+    public async Task Poll_PollerInput_HasCorrectFields()
+    {
+        var (context, execCtx) = MakeContext();
+        PollerInput? captured = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                captured = callInfo[1] as PollerInput;
+                return Task.FromResult(Json("""{"status":"Complete"}"""));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult.status == 'Complete'}}",
+            Delay = "PT100M",
+            Timeout = "PT30D",
+            OnTimeout = "continue"
+        }), execCtx);
+
+        Assert.NotNull(captured);
+        Assert.Equal("CheckStatusActivity", captured!.ActivityName);
+        Assert.Equal("statusResult", captured.OutputName);
+        Assert.Equal("{{statusResult.status == 'Complete'}}", captured.UntilExpression);
+        Assert.Equal("PT100M", captured.Delay);
+        Assert.Equal("PT30D", captured.Timeout);
+        Assert.Equal("continue", captured.OnTimeout);
+    }
+
+    [Fact]
+    public async Task Poll_InputResolvedFromParentContext()
+    {
+        var (context, execCtx) = MakeContext(inputJson: """{"correlationId":"abc123"}""");
+        PollerInput? captured = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                captured = callInfo[1] as PollerInput;
+                return Task.FromResult(Json("{}"));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Input = "{{input.correlationId}}",
+            Output = "statusResult",
+            Until = "{{statusResult != null}}",
+            Delay = "PT30S"
+        }), execCtx);
+
+        Assert.NotNull(captured);
+        Assert.NotNull(captured!.ActivityInput);
+        Assert.Equal("abc123", captured.ActivityInput!.Value.GetString());
+    }
+
+    [Fact]
+    public async Task Poll_InstanceId_HasCorrectFormat()
+    {
+        var (context, execCtx) = MakeContext(instanceId: "parent-instance");
+        SubOrchestrationOptions? capturedOpts = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedOpts = callInfo[2] as SubOrchestrationOptions;
+                return Task.FromResult(Json("{}"));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult != null}}",
+            Delay = "PT30S"
+        }), execCtx);
+
+        Assert.NotNull(capturedOpts);
+        Assert.Equal("parent-instance:WaitForCompletion:poller", capturedOpts.InstanceId);
+    }
+
+    [Fact]
+    public async Task Poll_Result_StoredUnderOutputName()
+    {
+        var (context, execCtx) = MakeContext();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("""{"status":"Complete"}""")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult.status == 'Complete'}}",
+            Delay = "PT30S"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("statusResult"));
+        var stored = (JsonElement)execCtx.GetOutput("statusResult")!;
+        Assert.Equal("Complete", stored.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Poll_JsonNullResult_StoresExplicitNull()
+    {
+        // JSON null result means on-timeout: continue fired inside the poller
+        var (context, execCtx) = MakeContext();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("null")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult.status == 'Complete'}}",
+            Delay = "PT30S",
+            OnTimeout = "continue"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("statusResult"));
+        Assert.Null(execCtx.GetOutput("statusResult"));
+    }
+
+    [Fact]
+    public async Task Poll_ConditionFalse_SkipsPoller()
+    {
+        var (context, execCtx) = MakeContext();
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "WaitForCompletion",
+            Type = StepType.Poll,
+            ActivityName = "CheckStatusActivity",
+            Output = "statusResult",
+            Until = "{{statusResult != null}}",
+            Delay = "PT30S",
+            Condition = "{{input.runPoll}}"   // not set → falsy
+        }), execCtx);
+
+        await context.DidNotReceive().CallSubOrchestratorAsync<JsonElement>(
+            Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>());
+    }
+
     // ---- Condition ----
 
     [Fact]

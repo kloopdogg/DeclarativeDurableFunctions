@@ -7,5 +7,6 @@ internal enum StepType
     Foreach,
     Parallel,
     WaitForEvent,
-    Switch
+    Switch,
+    Poll,
 }

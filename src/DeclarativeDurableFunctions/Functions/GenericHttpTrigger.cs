@@ -4,7 +4,7 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.DurableTask.Client;
 
-namespace DeclarativeDurableFunctions.TestApp.Functions;
+namespace DeclarativeDurableFunctions.Functions;
 
 public class GenericHttpTrigger
 {

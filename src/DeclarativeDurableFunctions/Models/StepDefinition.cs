@@ -23,4 +23,8 @@ internal sealed class StepDefinition
     public string? SwitchOn { get; init; }
     public IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> Cases { get; init; }
         = new Dictionary<string, IReadOnlyList<StepDefinition>>();
+
+    // Poll
+    public string? Until { get; init; }
+    public string? Delay { get; init; }
 }

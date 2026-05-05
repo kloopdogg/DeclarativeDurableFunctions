@@ -453,4 +453,156 @@ public class WorkflowDefinitionRegistryTests
         Assert.Contains("Beta", registry.WorkflowNames);
         Assert.Equal(2, registry.WorkflowNames.Count);
     }
+
+    // ---- Round-trip: poll step ----
+
+    [Fact]
+    public void LoadFromYaml_PollStep_ParsesAllFields()
+    {
+        const string yaml = """
+            workflow:
+              name: PollWorkflow
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  input: "{{input.correlationId}}"
+                  output: statusResult
+                  until: "{{statusResult.status == 'Complete'}}"
+                  delay: PT100M
+                  timeout: PT30D
+                  on-timeout: continue
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "PollWorkflow").Steps[0];
+
+        Assert.Equal(StepType.Poll, step.Type);
+        Assert.Equal("CheckStatusActivity", step.ActivityName);
+        Assert.Equal("statusResult", step.Output);
+        Assert.Equal("{{statusResult.status == 'Complete'}}", step.Until);
+        Assert.Equal("PT100M", step.Delay);
+        Assert.Equal("PT30D", step.Timeout);
+        Assert.Equal("continue", step.OnTimeout);
+    }
+
+    [Fact]
+    public void LoadFromYaml_PollStep_OptionalTimeout_IsNull_DefaultOnTimeoutIsFail()
+    {
+        const string yaml = """
+            workflow:
+              name: PollWorkflow
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  output: statusResult
+                  until: "{{statusResult != null}}"
+                  delay: PT30S
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "PollWorkflow").Steps[0];
+
+        Assert.Equal(StepType.Poll, step.Type);
+        Assert.Null(step.Timeout);
+        Assert.Equal("fail", step.OnTimeout);
+    }
+
+    // ---- Validation: poll required fields ----
+
+    [Fact]
+    public void LoadFromYaml_PollWithoutActivity_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadPoll
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  output: statusResult
+                  until: "{{statusResult.status == 'Complete'}}"
+                  delay: PT30S
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
+        Assert.Contains("activity", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_PollWithoutOutput_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadPoll
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  until: "{{statusResult.status == 'Complete'}}"
+                  delay: PT30S
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
+        Assert.Contains("output", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_PollWithoutUntil_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadPoll
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  output: statusResult
+                  delay: PT30S
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
+        Assert.Contains("until", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_PollWithoutDelay_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadPoll
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  output: statusResult
+                  until: "{{statusResult.status == 'Complete'}}"
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
+        Assert.Contains("delay", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_PollWithInvalidOnTimeout_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadPoll
+              steps:
+                - name: WaitForCompletion
+                  type: poll
+                  activity: CheckStatusActivity
+                  output: statusResult
+                  until: "{{statusResult.status == 'Complete'}}"
+                  delay: PT30S
+                  on-timeout: skip
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
+        Assert.Contains("on-timeout", ex.Message);
+    }
 }

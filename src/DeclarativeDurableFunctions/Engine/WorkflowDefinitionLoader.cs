@@ -91,6 +91,8 @@ internal static class WorkflowDefinitionLoader
         string? switchOn = null;
         IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> cases =
             new Dictionary<string, IReadOnlyList<StepDefinition>>();
+        string? until = null;
+        string? delay = null;
 
         switch (stepType)
         {
@@ -147,6 +149,31 @@ internal static class WorkflowDefinitionLoader
                         $"Step '{name}' (switch) is missing required 'cases' field.", workflowContext);
                 cases = ParseCases(casesRaw, workflowContext);
                 break;
+
+            case StepType.Poll:
+                if (activityName == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (poll) is missing required 'activity' field.", workflowContext);
+                if (output == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (poll) is missing required 'output' field. " +
+                        "The output name is used in the 'until' expression to reference the activity result.",
+                        workflowContext);
+                until = GetString(dict, "until");
+                if (until == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (poll) is missing required 'until' field.", workflowContext);
+                delay = GetString(dict, "delay");
+                if (delay == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (poll) is missing required 'delay' field.", workflowContext);
+                timeout = GetString(dict, "timeout");
+                onTimeout = GetString(dict, "on-timeout") ?? "fail";
+                if (onTimeout != "fail" && onTimeout != "continue")
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
+                        workflowContext);
+                break;
         }
 
         return new StepDefinition
@@ -166,7 +193,9 @@ internal static class WorkflowDefinitionLoader
             Timeout = timeout,
             OnTimeout = onTimeout,
             SwitchOn = switchOn,
-            Cases = cases
+            Cases = cases,
+            Until = until,
+            Delay = delay
         };
     }
 
@@ -193,6 +222,7 @@ internal static class WorkflowDefinitionLoader
             "parallel"         => StepType.Parallel,
             "wait-for-event"   => StepType.WaitForEvent,
             "switch"           => StepType.Switch,
+            "poll"             => StepType.Poll,
             null               => throw new WorkflowDefinitionException(
                                     $"Cannot infer step type for step '{stepName}': no 'activity', 'workflow', or 'type' field.",
                                     workflowContext),

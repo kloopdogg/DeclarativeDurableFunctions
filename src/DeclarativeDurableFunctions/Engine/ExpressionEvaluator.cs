@@ -275,10 +275,14 @@ internal static class ExpressionEvaluator
         _ => true
     };
 
-    private static string Stringify(object? value) => value switch
+    internal static string Stringify(object? value) => value switch
     {
-        null       => "",
+        null => "",
+        bool b => b ? "true" : "false",
         JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString() ?? "",
+        JsonElement je when je.ValueKind == JsonValueKind.Null   => "",
+        JsonElement je when je.ValueKind == JsonValueKind.True   => "true",
+        JsonElement je when je.ValueKind == JsonValueKind.False  => "false",
         JsonElement je => je.ToString(),
         _ => value.ToString() ?? ""
     };
@@ -315,11 +319,12 @@ internal sealed class ExprLexer(string text)
 
         var c = text[_pos];
 
-        if (c == '"')
+        if (c == '"' || c == '\'')
         {
+            var quote = c;
             _pos++;
             var sb = new System.Text.StringBuilder();
-            while (_pos < text.Length && text[_pos] != '"')
+            while (_pos < text.Length && text[_pos] != quote)
             {
                 if (text[_pos] == '\\' && _pos + 1 < text.Length)
                 {

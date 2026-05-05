@@ -23,7 +23,7 @@ workflow:
 
     - name: WaitForApproval
       type: wait-for-event
-      event: OrderApproved
+      event: ApprovalDecision
       timeout: P7D
       on-timeout: continue
       output: approval
@@ -32,9 +32,25 @@ workflow:
       type: parallel
       output: finalize
       steps:
-        - name: SendConfirmation
-          activity: SendConfirmationEmailActivity
-          input: "{{input.customerEmail}}"
-        - name: UpdateLedger
-          activity: UpdateLedgerActivity
-          input: "{{fulfillmentResults}}"
+        - name: HandleResult
+          type: switch
+          on: "{{approval.decision == 'approved'}}"
+          cases:
+            "true":
+              - name: SendConfirmation
+                activity: SendConfirmationEmailActivity
+                input: "{{input.customerEmail}}"
+              - name: UpdateLedger
+                activity: UpdateLedgerActivity
+                input: "{{fulfillmentResults}}"
+            "false":
+              - name: CraftFailureNotification
+                activity: WriteTelegramMessageActivity
+                input:
+                  data: "{{approval}}"
+                  status: "{{approval.decision}}"
+                output: createdNotification
+              - name: NotifyTeam
+                activity: SendTelegramMessageActivity
+                input: "{{createdNotification.telegramMessage}}"
+                output: teamNotification

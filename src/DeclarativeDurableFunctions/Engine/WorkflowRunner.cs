@@ -44,6 +44,7 @@ internal static class WorkflowRunner
             case StepType.Parallel:         await RunParallel(context, step, execCtx, outputNameOverride); break;
             case StepType.WaitForEvent:     await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
             case StepType.Switch:           await RunSwitch(context, step, execCtx); break;
+            case StepType.Poll:             await RunPoll(context, step, execCtx, outputNameOverride); break;
         }
     }
 
@@ -98,7 +99,7 @@ internal static class WorkflowRunner
         WorkflowExecutionContext execCtx)
     {
         var suffix = step.InstanceId != null
-            ? Stringify(ExpressionEvaluator.Evaluate(step.InstanceId, execCtx))
+            ? ExpressionEvaluator.Stringify(ExpressionEvaluator.Evaluate(step.InstanceId, execCtx))
             : context.NewGuid().ToString();
         return $"{context.InstanceId}:{step.Name}:{suffix}";
     }
@@ -230,6 +231,42 @@ internal static class WorkflowRunner
             execCtx.SetOutput(effectiveOutputOnTimeout, null);
     }
 
+    // ---- Poll ----
+
+    private static async Task RunPoll(
+        TaskOrchestrationContext context,
+        StepDefinition step,
+        WorkflowExecutionContext execCtx,
+        string? outputNameOverride = null)
+    {
+        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+        var activityInputJson = JsonSerializer.SerializeToElement(resolvedInput);
+
+        var pollerInput = new PollerInput
+        {
+            ActivityName    = step.ActivityName!,
+            ActivityInput   = activityInputJson,
+            OutputName      = step.Output!,
+            UntilExpression = step.Until!,
+            Delay           = step.Delay!,
+            Timeout         = step.Timeout,
+            OnTimeout       = step.OnTimeout,
+            StartedAt       = context.CurrentUtcDateTime
+        };
+
+        var instanceId = $"{context.InstanceId}:{step.Name ?? step.ActivityName}:poller";
+        var options = new SubOrchestrationOptions(retry: null, instanceId: instanceId);
+        var result = await context.CallSubOrchestratorAsync<JsonElement>(
+            DeclarativePollerOrchestrator.FunctionName, pollerInput, options);
+
+        var effectiveOutput = outputNameOverride ?? step.Output;
+        if (effectiveOutput != null)
+        {
+            object? outputValue = result.ValueKind == System.Text.Json.JsonValueKind.Null ? null : result;
+            execCtx.SetOutput(effectiveOutput, outputValue);
+        }
+    }
+
     // ---- Switch ----
 
     private static async Task RunSwitch(
@@ -238,7 +275,7 @@ internal static class WorkflowRunner
         WorkflowExecutionContext execCtx)
     {
         var onValue = ExpressionEvaluator.Evaluate(step.SwitchOn!, execCtx);
-        var key = Stringify(onValue);
+        var key = ExpressionEvaluator.Stringify(onValue);
 
         if (!step.Cases.TryGetValue(key, out var caseSteps))
             step.Cases.TryGetValue("default", out caseSteps);
@@ -247,14 +284,4 @@ internal static class WorkflowRunner
             await ExecuteSteps(context, caseSteps, execCtx);
     }
 
-    // ---- Helpers ----
-
-    private static string Stringify(object? value) => value switch
-    {
-        null => "",
-        JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString() ?? "",
-        JsonElement je when je.ValueKind == JsonValueKind.Null   => "",
-        JsonElement je => je.ToString(),
-        _ => value.ToString() ?? ""
-    };
 }

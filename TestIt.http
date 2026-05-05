@@ -1,0 +1,46 @@
+@host = http://localhost:7071
+
+### Simple: Start workflow
+POST {{host}}/api/workflows/Simple
+Content-Type: application/json
+
+{ }
+
+### OrderFulfillment: Start workflow
+POST {{host}}/api/workflows/OrderFulfillment
+Content-Type: application/json
+
+{
+  "orderId": "ord-3",
+  "customerId": "cust-1",
+  "customerEmail": "test@example.com",
+  "correlationId": "corr-v2-001",
+  "lineItems": [
+    { "lineItemId": "li-1", "productId": "prod-1", "quantity": 2 }
+  ]
+}
+
+###
+@instanceId = b382310e494844398b760d0fb4e2fa2b
+
+###
+
+### Generic: Approve
+POST {{host}}/api/events/{{instanceId}}/ApprovalDecision
+Content-Type: application/json
+
+{
+  "decision": "approved",
+  "decisionMaker": "manager",
+  "decisionTimestamp": "2026-05-03T12:00:00Z"
+}
+
+### Generic: Decline
+POST {{host}}/api/events/{{instanceId}}/ApprovalDecision
+Content-Type: application/json
+
+{
+  "decision": "declined",
+  "decisionMaker": "director",
+  "decisionTimestamp": "2026-05-03T12:00:00Z"
+}

@@ -139,6 +139,8 @@ src/
       WorkflowExecutionContext.cs
       ExpressionEvaluator.cs
       WorkflowRunner.cs
+      PollerInput.cs
+      DeclarativePollerOrchestrator.cs
     Extensions/
       ServiceCollectionExtensions.cs
       OrchestrationContextExtensions.cs
@@ -391,7 +393,7 @@ workflow:
 2. If `workflow` field is present and `type` is omitted → `type: sub-orchestration`.
 3. If `workflow` field is present and `type: foreach` → foreach over sub-orchestration.
 4. If `activity` field is present and `type: foreach` → foreach over activity.
-5. `type` must be one of: `activity`, `sub-orchestration`, `foreach`, `parallel`, `wait-for-event`, `switch`. Any other value is a `WorkflowDefinitionException`.
+5. `type` must be one of: `activity`, `sub-orchestration`, `foreach`, `parallel`, `wait-for-event`, `switch`, `poll`. Any other value is a `WorkflowDefinitionException`.
 
 ### 5.4 Activity Step
 
@@ -507,6 +509,7 @@ A parallel block is a **fan-out/fan-in** construct. All branches launch concurre
 | `sub-orchestration` | Return value of the sub-orchestration |
 | `foreach` | Array of all iteration results |
 | `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
+| `poll` | Last activity result satisfying `until`; `null` if `on-timeout: continue` fires |
 | `switch` | `null` — switch routes execution and has no return value |
 | `parallel` (nested) | The nested block's aggregate object |
 | Any step with `condition: false` | `null` — the step was skipped |
@@ -545,12 +548,64 @@ A parallel block is a **fan-out/fan-in** construct. All branches launch concurre
   condition: "{{...}}"      # optional
 ```
 
-- Case keys are strings. Comparison against the evaluated `on` expression is **string comparison, case-sensitive** (convert number results to string before comparing).
+**If-else mode** — use a boolean expression in `on:` and match on `"true"`/`"false"`:
+
+```yaml
+- name: HandleResult
+  type: switch
+  on: "{{stepResult.status == 'Succeeded'}}"
+  cases:
+    "true":
+      - name: OnSuccess
+        activity: HandleSuccessActivity
+        input:
+          status: "{{stepResult.status}}"
+          message: "{{stepResult.message}}"
+    "false":
+      - name: OnFailure
+        activity: HandleFailureActivity
+        input:
+          status: "{{stepResult.status}}"
+```
+
+Boolean expressions always produce the lowercase strings `"true"` or `"false"` — write case keys in lowercase accordingly.
+
+- Case keys are strings. Comparison against the evaluated `on` expression is **string comparison, case-sensitive** (convert number and boolean results to string before comparing; booleans become `"true"` or `"false"`).
 - The `default` key is reserved and matched last.
 - If no case matches and there is no `default`, the switch step is a no-op (no error).
 - Steps within a case inherit the parent `WorkflowExecutionContext` and may write named outputs into it.
 
-### 5.10 Complete Example: `OrderFulfillment.yaml`
+### 5.10 Poll Step
+
+```yaml
+- name: WaitForCompletion
+  type: poll
+  activity: CheckStatusActivity
+  input: "{{input.correlationId}}"
+  output: statusResult
+  until: "{{statusResult.status == 'Complete'}}"
+  delay: PT100M
+  timeout: PT30D
+  on-timeout: fail        # fail (default) | continue
+  condition: "{{...}}"   # optional
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `activity` | string | Yes | Activity function name called on each iteration |
+| `input` | expression or object | No | Resolved once in parent context; same value used for every iteration |
+| `output` | string | Yes | Variable name bound to the latest activity result; used in `until` expression and stored in parent context on success |
+| `until` | expression | Yes | Boolean expression evaluated after each activity call; must reference `output` name |
+| `delay` | duration | Yes | ISO 8601 duration; sleep between failed iterations (e.g. `PT100M`, `PT30S`) |
+| `timeout` | duration | No | ISO 8601 wall-clock bound on the entire polling loop; omit to poll indefinitely |
+| `on-timeout` | string | No | `fail` (default) — throw `WorkflowTimeoutException`; `continue` — store `null` and proceed |
+| `condition` | expression | No | If false, the step is skipped and no poller sub-orchestration is started |
+
+**Scope constraint on `until`:** The `until` expression runs inside the `DeclarativeWorkflowPoller` sub-orchestration. It has no access to the parent workflow's step outputs. Only the step's own `output` name (the latest activity result) and `orchestration.instanceId` / `orchestration.parentInstanceId` are available.
+
+**Implementation:** `type: poll` dispatches to a built-in sub-orchestration named `DeclarativeWorkflowPoller` that ships inside the library assembly. The Functions runtime scans the library assembly and registers this orchestration automatically. `ContinueAsNew` is called after each failed iteration with the original `StartedAt` preserved, so the wall-clock timeout is correctly enforced across restarts. History is reset on each `ContinueAsNew` call, keeping it bounded regardless of how many iterations run.
+
+### 5.11 Complete Example: `OrderFulfillment.yaml`
 
 ```yaml
 workflow:
@@ -599,7 +654,7 @@ workflow:
           input: "{{fulfillmentResults}}"
 ```
 
-### 5.11 Complete Example: `FulfillLineItem.yaml`
+### 5.12 Complete Example: `FulfillLineItem.yaml`
 
 ```yaml
 workflow:
@@ -648,7 +703,7 @@ Expressions are delimited by `{{` and `}}`. They appear as YAML string values.
 | `{{orchestration.instanceId}}` | Current orchestration instance ID (string) |
 | `{{orchestration.parentInstanceId}}` | Parent instance ID (string or null) |
 
-**Condition-only forms** (only valid in `condition` fields and `switch.on`):
+**Condition-only forms** (only valid in `condition`, `until`, and `switch.on` fields):
 
 | Form | Description |
 |---|---|
@@ -756,7 +811,8 @@ internal enum StepType
     Foreach,
     Parallel,
     WaitForEvent,
-    Switch
+    Switch,
+    Poll
 }
 
 // Models/AppRetryPolicy.cs
@@ -798,6 +854,10 @@ internal sealed class StepDefinition
     public string? SwitchOn { get; init; }
     public IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> Cases { get; init; }
         = new Dictionary<string, IReadOnlyList<StepDefinition>>();
+
+    // Poll
+    public string? Until { get; init; }    // required for Poll; boolean expression
+    public string? Delay { get; init; }    // required for Poll; ISO 8601 duration
 }
 
 // Models/WorkflowDefinition.cs
@@ -1036,7 +1096,90 @@ foreach childStep in matchingCase:
 return null
 ```
 
-### 8.10 YAML Parsing (`WorkflowDefinitionLoader`)
+### 8.10 Poll Dispatch
+
+The poll step is dispatched as a call to the built-in `DeclarativeWorkflowPoller` sub-orchestration. The parent workflow resolves the activity input once (in its own `WorkflowExecutionContext`), then hands off a frozen `PollerInput` to the sub-orchestration.
+
+**In `WorkflowRunner` (parent orchestration):**
+
+```
+resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx)
+activityInputJson = JsonSerializer.SerializeToElement(resolvedInput)
+
+pollerInput = new PollerInput
+{
+    ActivityName    = step.ActivityName,
+    ActivityInput   = activityInputJson,
+    OutputName      = step.Output,             // required; validated at load time
+    UntilExpression = step.Until,
+    Delay           = step.Delay,
+    Timeout         = step.Timeout,            // null if omitted
+    OnTimeout       = step.OnTimeout,          // "fail" | "continue"
+    StartedAt       = context.CurrentUtcDateTime
+}
+
+instanceId = $"{context.InstanceId}:{step.Name ?? step.ActivityName}:poller"
+options = new SubOrchestrationOptions(null, instanceId)
+result = await context.CallSubOrchestratorAsync<JsonElement>("DeclarativeWorkflowPoller", pollerInput, options)
+
+effectiveOutput = outputNameOverride ?? step.Output
+if effectiveOutput != null: execCtx.SetOutput(effectiveOutput, result)
+```
+
+**`PollerInput` internal type** (add to `Engine/PollerInput.cs`):
+
+```csharp
+internal sealed class PollerInput
+{
+    public string ActivityName { get; init; } = string.Empty;
+    public JsonElement? ActivityInput { get; init; }
+    public string OutputName { get; init; } = string.Empty;    // variable name for until expression
+    public string UntilExpression { get; init; } = string.Empty;
+    public string Delay { get; init; } = string.Empty;         // ISO 8601
+    public string? Timeout { get; init; }                       // ISO 8601; null = no timeout
+    public string OnTimeout { get; init; } = "fail";
+    public DateTimeOffset StartedAt { get; init; }              // fixed at first iteration; preserved across ContinueAsNew
+}
+```
+
+**`DeclarativeWorkflowPoller` orchestration** (add to `Engine/DeclarativePollerOrchestrator.cs`):
+
+The class lives in the library assembly. The Functions runtime scans the library assembly alongside the consumer's app assembly and registers the function automatically — no consumer-side registration required.
+
+```
+input = context.GetInput<PollerInput>()
+
+// Call the activity for this iteration
+result = await context.CallActivityAsync<JsonElement>(input.ActivityName, input.ActivityInput)
+
+// Evaluate the until condition against a minimal context containing only the activity result
+miniCtx = new WorkflowExecutionContext(default(JsonElement), context)
+miniCtx.SetOutput(input.OutputName, result)
+conditionMet = ExpressionEvaluator.EvaluateBool(input.UntilExpression, miniCtx)
+
+if conditionMet:
+    return result   // completes the poller; parent stores under output name
+
+// Check wall-clock timeout before sleeping
+if input.Timeout != null:
+    elapsed = context.CurrentUtcDateTime - input.StartedAt
+    if elapsed >= ParseIso8601Duration(input.Timeout):
+        if input.OnTimeout == "fail":
+            throw new WorkflowTimeoutException(input.ActivityName, input.Timeout)
+        else:  // "continue"
+            return null   // parent stores null under output name; matches wait-for-event semantics
+
+// Sleep the configured delay, then restart with ContinueAsNew
+// StartedAt is preserved in input — it always measures wall-clock from the first iteration
+await context.CreateTimer(
+    context.CurrentUtcDateTime + ParseIso8601Duration(input.Delay),
+    CancellationToken.None)
+
+context.ContinueAsNew(input)
+// No return needed; ContinueAsNew schedules the restart and the current execution ends
+```
+
+### 8.11 YAML Parsing (`WorkflowDefinitionLoader`)
 
 Use **YamlDotNet** to deserialize YAML into an intermediate dictionary model, then map to `WorkflowDefinition`. Do not use YamlDotNet's direct deserialization to the model types (mapping manually gives better validation error messages).
 
@@ -1052,10 +1195,15 @@ Validation rules (throw `WorkflowDefinitionException` for any violation):
 9. `on-timeout` must be `fail` or `continue` if present.
 10. Step `name` must be unique within a workflow (across all nesting levels — warn but do not throw if duplicate names exist in different parallel/switch branches).
 11. A child step inside a `parallel` block must not declare `output:`. Throw `WorkflowDefinitionException` at load time with a message explaining that branch results are keyed by step name and collected via the block's own `output:` field.
+12. `poll` step must have `activity`.
+13. `poll` step must have `until`.
+14. `poll` step must have `delay`.
+15. `poll` step must have `output` (required so the `until` expression has a variable name to reference).
+16. `poll` step `on-timeout` must be `fail` or `continue` if present.
 
 ISO 8601 duration parsing: use a helper that converts `PT5S` → `TimeSpan.FromSeconds(5)`, `P7D` → `TimeSpan.FromDays(7)`, etc. Standard .NET does not parse ISO 8601 durations natively; implement a minimal parser (only `P`, `D`, `H`, `M`, `S` components needed).
 
-### 8.11 Determinism Constraints
+### 8.12 Determinism Constraints
 
 The `WorkflowRunner` runs inside the orchestrator and is subject to Durable Functions replay rules:
 - No `DateTime.Now` or `DateTime.UtcNow` — use `context.CurrentUtcDateTime`.
@@ -1131,6 +1279,12 @@ Cover all expression forms in §6.2. Key cases:
 | Valid `on-timeout` values | `fail`, `continue` | parses correctly |
 | Invalid `on-timeout` value | `escalate` | `WorkflowDefinitionException` |
 | Parallel child with `output:` | child step declares `output: foo` inside parallel | `WorkflowDefinitionException` at load time |
+| Poll — all required fields | `type: poll` with `activity`, `output`, `until`, `delay` | parses correctly; `StepType.Poll` |
+| Poll — missing `until` | `type: poll` without `until` | `WorkflowDefinitionException` |
+| Poll — missing `delay` | `type: poll` without `delay` | `WorkflowDefinitionException` |
+| Poll — missing `output` | `type: poll` without `output` | `WorkflowDefinitionException` |
+| Poll — missing `activity` | `type: poll` without `activity` | `WorkflowDefinitionException` |
+| Poll — optional `timeout` absent | `type: poll` without `timeout` | parses; `Timeout` is null |
 
 ### 9.3 WorkflowRunnerTests
 
@@ -1158,6 +1312,11 @@ Mock `TaskOrchestrationContext` with NSubstitute. Set up `context.Name` to retur
 | Switch — default case | Default steps executed when no key matches |
 | Switch — no match, no default | No steps executed; no error |
 | Sub-orchestration | `CallSubOrchestratorAsync` called with correct workflow name and instance ID |
+| Poll — condition satisfied on first call | `CallSubOrchestratorAsync("DeclarativeWorkflowPoller", ...)` called; result stored under `output` |
+| Poll — `PollerInput` fields | `ActivityName`, `OutputName`, `UntilExpression`, `Delay`, `Timeout`, `OnTimeout`, `StartedAt` all correctly populated |
+| Poll — input resolved in parent context | Activity input expression referencing parent step output is resolved before `PollerInput` is constructed |
+| Poll — instance ID format | Sub-orchestration instance ID is `{parentInstanceId}:{stepName}:poller` |
+| Poll — condition=false skips | When step `condition` is false, `DeclarativeWorkflowPoller` is never called |
 
 ---
 
@@ -1168,7 +1327,7 @@ Execute in this order. Each phase should compile and all tests should pass befor
 1. **Phase 1 — Scaffold**: `.slnx`, all three `.csproj` files, `Program.cs` in TestApp, empty class stubs (models only, no logic). `dotnet build` green.
 2. **Phase 2 — YAML Model + Loader**: `WorkflowDefinition`, `StepDefinition`, `WorkflowDefinitionLoader`. Write and pass `WorkflowDefinitionLoaderTests`. No engine logic yet.
 3. **Phase 3 — Expression Evaluator**: `ExpressionEvaluator` + `WorkflowExecutionContext`. Write and pass `ExpressionEvaluatorTests`.
-4. **Phase 4 — WorkflowRunner**: Full runner with all step types. Write and pass `WorkflowRunnerTests`.
+4. **Phase 4 — WorkflowRunner**: Full runner with all step types including `Poll` (dispatch to `DeclarativeWorkflowPoller`) and the `DeclarativePollerOrchestrator` class. Write and pass `WorkflowRunnerTests`.
 5. **Phase 5 — DI + Extension Methods**: `ServiceCollectionExtensions`, `OrchestrationContextExtensions`, `IWorkflowDefinitionRegistry`. Wire into `WorkflowRunner`.
 6. **Phase 6 — TestApp**: Activities, orchestrator stubs, YAML files, `Program.cs` DI wiring. App should start locally without errors (`func start`).
 7. **Phase 7 — Polish**: Package metadata in `.csproj`, XML doc comments on all public API types, validate ISO duration edge cases.

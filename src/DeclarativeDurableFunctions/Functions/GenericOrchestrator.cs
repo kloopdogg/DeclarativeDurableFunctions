@@ -4,11 +4,13 @@ using DeclarativeDurableFunctions.Extensions;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.DurableTask;
 
-namespace DeclarativeDurableFunctions.TestApp.Functions;
+namespace DeclarativeDurableFunctions.Functions;
 
-public class GenericSubOrchestrator(IWorkflowDefinitionRegistry registry)
+public class GenericOrchestrator(IWorkflowDefinitionRegistry registry)
 {
-    [Function(DynamicOrchestrationContextExtensions.GenericSubOrchestrationFunctionName)]
+    public const string FunctionName = "GenericOrchestrator";
+
+    [Function(FunctionName)]
     public Task<JsonElement> RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
         => context.RunWorkflowDynamicAsync(registry);
 }
