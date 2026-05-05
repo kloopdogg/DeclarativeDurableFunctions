@@ -30,16 +30,7 @@ These were identified while writing the spec. Each is resolved here; do not reli
 
 ### 1.2 Dependency Injection for Registry
 
-The vision shows a parameter-less `context.RunWorkflow()`. In the isolated worker model, static methods cannot receive constructor-injected services. The orchestrator stub must be an **instance class** receiving `IWorkflowDefinitionRegistry` via constructor injection:
-
-```csharp
-public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
-{
-    [Function("OrderFulfillment")]
-    public Task RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
-        => context.RunWorkflowAsync(registry);
-}
-```
+In the isolated worker model, static methods cannot receive constructor-injected services. The library's `GenericOrchestrator` and `GenericSubOrchestrator` are instance classes that receive `IWorkflowDefinitionRegistry` via constructor injection and call `RunWorkflowAsync` internally. Consumers never write an orchestrator class.
 
 The extension method signature is `RunWorkflowAsync(this TaskOrchestrationContext context, IWorkflowDefinitionRegistry registry)`.
 
@@ -113,7 +104,7 @@ YAML workflow files are part of the Functions app, not the library. In the TestA
 
 ### 1.10 Workflow Name Resolution
 
-The workflow name is the YAML **filename without extension**, case-preserved. The `workflow.name` field inside the YAML is optional metadata (used for logging only). The `[Function("X")]` attribute value on the orchestrator stub MUST exactly match the YAML filename (case-sensitive; Azure runs on Linux).
+The workflow name is the YAML **filename without extension**, case-preserved. The `workflow.name` field inside the YAML is optional metadata (used for logging only). The `GenericOrchestrator` reads the workflow name from the `__workflow` key in the Durable instance input envelope — there are no per-workflow `[Function]` attributes for consumers to maintain.
 
 ---
 
@@ -162,9 +153,6 @@ src/
       FulfillLineItemActivity.cs
       SendConfirmationEmailActivity.cs
       UpdateInventoryActivity.cs
-    Orchestrators/
-      OrderFulfillmentOrchestrator.cs
-      FulfillLineItemOrchestrator.cs
     Models/
       Order.cs
       LineItem.cs
@@ -292,21 +280,7 @@ The TestApp ships two workflows that exercise all supported step types:
 
 Full YAML content is specified in §5.
 
-### 4.4 Orchestrator Stubs
-
-Each YAML workflow needs an orchestrator stub class. The `[Function]` name MUST match the YAML filename exactly.
-
-```csharp
-// Orchestrators/OrderFulfillmentOrchestrator.cs
-public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
-{
-    [Function("OrderFulfillment")]
-    public Task RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
-        => context.RunWorkflowAsync(registry);
-}
-```
-
-### 4.5 Activity Function Pattern
+### 4.4 Activity Function Pattern
 
 Activities use isolated worker conventions. The `TaskActivityContext` parameter is optional (include it only if needed for logging/instance ID):
 
@@ -336,7 +310,7 @@ public class FulfillLineItemActivity
 }
 ```
 
-### 4.6 Trigger Function Pattern
+### 4.5 Trigger Function Pattern
 
 Trigger functions (HTTP, Service Bus, Timer, etc.) start orchestrations using `DurableTaskClient`. To set a custom instance ID, pass `StartOrchestrationOptions` — there is no positional instance ID overload in the isolated worker model.
 
@@ -1329,7 +1303,7 @@ Execute in this order. Each phase should compile and all tests should pass befor
 3. **Phase 3 — Expression Evaluator**: `ExpressionEvaluator` + `WorkflowExecutionContext`. Write and pass `ExpressionEvaluatorTests`.
 4. **Phase 4 — WorkflowRunner**: Full runner with all step types including `Poll` (dispatch to `DeclarativeWorkflowPoller`) and the `DeclarativePollerOrchestrator` class. Write and pass `WorkflowRunnerTests`.
 5. **Phase 5 — DI + Extension Methods**: `ServiceCollectionExtensions`, `OrchestrationContextExtensions`, `IWorkflowDefinitionRegistry`. Wire into `WorkflowRunner`.
-6. **Phase 6 — TestApp**: Activities, orchestrator stubs, YAML files, `Program.cs` DI wiring. App should start locally without errors (`func start`).
+6. **Phase 6 — TestApp**: Activities, YAML files, `Program.cs` DI wiring. App should start locally without errors (`func start`).
 7. **Phase 7 — Polish**: Package metadata in `.csproj`, XML doc comments on all public API types, validate ISO duration edge cases.
 
 ---
