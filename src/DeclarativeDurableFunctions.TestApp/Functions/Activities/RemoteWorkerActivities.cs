@@ -36,7 +36,7 @@ public class RemoteWorkerActivities(ILogger<RemoteWorkerActivities> logger,
 
     [Function("ReceiveRemoteWorkerResponseActivity")]
     public async Task ReceiveRemoteWorkerResponseActivity(
-        [ServiceBusTrigger("agent-task-responses", "orchestrator-responses", Connection = "AltServiceBusConnection")] string message,
+        [ServiceBusTrigger("agent-task-responses", "orchestrator-responses", Connection = "ServiceBusConnection")] string message,
         [DurableClient] DurableTaskClient client,
         FunctionContext context)
     {

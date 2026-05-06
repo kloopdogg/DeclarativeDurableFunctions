@@ -17,7 +17,7 @@ var host = new HostBuilder()
         services.AddDeclarativeWorkflows();
         services.AddAzureClients(clientBuilder =>
         {
-            clientBuilder.AddServiceBusClient(hostContext.Configuration["AltServiceBusConnection"]!)
+            clientBuilder.AddServiceBusClient(hostContext.Configuration["ServiceBusConnection"]!)
             .ConfigureOptions(options =>
             {
                 options.RetryOptions.Delay = TimeSpan.FromSeconds(1);
