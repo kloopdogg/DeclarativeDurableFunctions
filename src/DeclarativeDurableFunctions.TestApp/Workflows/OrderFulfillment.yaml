@@ -39,7 +39,10 @@ workflow:
             "true":
               - name: SendConfirmation
                 activity: SendConfirmationEmailActivity
-                input: "{{input.customerEmail}}"
+                input: 
+                  customerEmail: "{{input.customerEmail}}"
+                  subject: "Order Approved"
+                  body: "Your order has been approved."
               - name: UpdateLedger
                 activity: UpdateLedgerActivity
                 input: "{{fulfillmentResults}}"

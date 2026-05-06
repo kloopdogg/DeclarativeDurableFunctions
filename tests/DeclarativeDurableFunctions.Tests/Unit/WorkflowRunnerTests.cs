@@ -745,4 +745,203 @@ public class WorkflowRunnerTests
             Arg.Is<TaskName>(n => n.Name == "ChargeLateFeeActivity"),
             Arg.Any<object?>(), Arg.Any<TaskOptions?>());
     }
+
+    // ---- TriggerAndWait ----
+
+    [Fact]
+    public async Task TriggerAndWait_NoTimeout_EventPayload_StoredUnderOutput()
+    {
+        var (context, execCtx) = MakeContext();
+        var payload = Json("""{"status":"complete"}""");
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(payload));
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("{}")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "SendToProcessor",
+            Type = StepType.TriggerAndWait,
+            ActivityName = "SendOrderToProcessorActivity",
+            EventName = "OrderProcessed",
+            Output = "processingResult"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("processingResult"));
+        var stored = (JsonElement)execCtx.GetOutput("processingResult")!;
+        Assert.Equal("complete", stored.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_WaitForExternalEvent_CalledBeforeCallActivityAsync()
+    {
+        // Critical ordering guarantee: the event listener must be registered before
+        // the activity fires, so a fast downstream system cannot raise the callback
+        // before the orchestrator has expressed interest in it.
+        var (context, execCtx) = MakeContext();
+        var callOrder = new List<string>();
+
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callOrder.Add("WaitForExternalEvent");
+                return Task.FromResult(Json("{}"));
+            });
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(_ =>
+            {
+                callOrder.Add("CallActivityAsync");
+                return Task.FromResult(Json("{}"));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "SendToProcessor",
+            Type = StepType.TriggerAndWait,
+            ActivityName = "SendOrderToProcessorActivity",
+            EventName = "OrderProcessed"
+        }), execCtx);
+
+        Assert.Equal(2, callOrder.Count);
+        Assert.Equal("WaitForExternalEvent", callOrder[0]);
+        Assert.Equal("CallActivityAsync", callOrder[1]);
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_WithTimeout_EventWins_StoresPayload()
+    {
+        var (context, execCtx) = MakeContext();
+        var payload = Json("""{"status":"complete"}""");
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(payload));
+        context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource().Task); // never fires
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("{}")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "SendToProcessor",
+            Type = StepType.TriggerAndWait,
+            ActivityName = "SendOrderToProcessorActivity",
+            EventName = "OrderProcessed",
+            Timeout = "PT60M",
+            OnTimeout = "fail",
+            Output = "processingResult"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("processingResult"));
+        var stored = (JsonElement)execCtx.GetOutput("processingResult")!;
+        Assert.Equal("complete", stored.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_TimeoutFail_ThrowsWorkflowTimeoutException_ActivityStillAwaited()
+    {
+        var (context, execCtx) = MakeContext();
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<JsonElement>().Task); // never fires
+        context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask); // fires immediately
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("{}")));
+
+        await Assert.ThrowsAsync<WorkflowTimeoutException>(() =>
+            WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+            {
+                Name = "SendToProcessor",
+                Type = StepType.TriggerAndWait,
+                ActivityName = "SendOrderToProcessorActivity",
+                EventName = "OrderProcessed",
+                Timeout = "PT60M",
+                OnTimeout = "fail"
+            }), execCtx));
+
+        await context.Received(1).CallActivityAsync<JsonElement>(
+            Arg.Is<TaskName>(n => n.Name == "SendOrderToProcessorActivity"),
+            Arg.Any<object?>(), Arg.Any<TaskOptions?>());
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_TimeoutContinue_StoresNull_ActivityStillAwaited()
+    {
+        var (context, execCtx) = MakeContext();
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<JsonElement>().Task); // never fires
+        context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask); // fires immediately
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("{}")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "SendToProcessor",
+            Type = StepType.TriggerAndWait,
+            ActivityName = "SendOrderToProcessorActivity",
+            EventName = "OrderProcessed",
+            Timeout = "PT60M",
+            OnTimeout = "continue",
+            Output = "processingResult"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("processingResult"));
+        Assert.Null(execCtx.GetOutput("processingResult"));
+        await context.Received(1).CallActivityAsync<JsonElement>(
+            Arg.Is<TaskName>(n => n.Name == "SendOrderToProcessorActivity"),
+            Arg.Any<object?>(), Arg.Any<TaskOptions?>());
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_ConditionFalse_NeitherActivityNorEventCalled()
+    {
+        var (context, execCtx) = MakeContext();
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "SendToProcessor",
+            Type = StepType.TriggerAndWait,
+            ActivityName = "SendOrderToProcessorActivity",
+            EventName = "OrderProcessed",
+            Condition = "{{input.shouldSend}}" // not set → falsy
+        }), execCtx);
+
+        await context.DidNotReceive().CallActivityAsync<JsonElement>(
+            Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>());
+        await context.DidNotReceive().WaitForExternalEvent<JsonElement>(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerAndWait_ParallelBranch_TimeoutContinue_NullInAggregate()
+    {
+        var (context, execCtx) = MakeContext();
+        context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<JsonElement>().Task); // never fires
+        context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask); // fires immediately
+        context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("{}")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "Block",
+            Type = StepType.Parallel,
+            Output = "blockResult",
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Name = "SendBranch",
+                    Type = StepType.TriggerAndWait,
+                    ActivityName = "SendOrderToProcessorActivity",
+                    EventName = "OrderProcessed",
+                    Timeout = "PT60M",
+                    OnTimeout = "continue"
+                }
+            ]
+        }), execCtx);
+
+        var agg = (JsonElement)execCtx.GetOutput("blockResult")!;
+        Assert.Equal(JsonValueKind.Null, agg.GetProperty("SendBranch").ValueKind);
+    }
 }

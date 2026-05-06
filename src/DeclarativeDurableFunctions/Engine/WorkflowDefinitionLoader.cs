@@ -174,6 +174,20 @@ internal static class WorkflowDefinitionLoader
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
                 break;
+
+            case StepType.TriggerAndWait:
+                if (activityName == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (trigger-and-wait) is missing required 'activity' field.", workflowContext);
+                eventName = GetString(dict, "event") ?? throw new WorkflowDefinitionException(
+                        $"Step '{name}' (trigger-and-wait) is missing required 'event' field.", workflowContext);
+                timeout = GetString(dict, "timeout");
+                onTimeout = GetString(dict, "on-timeout") ?? "fail";
+                if (onTimeout != "fail" && onTimeout != "continue")
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
+                        workflowContext);
+                break;
         }
 
         return new StepDefinition
@@ -223,6 +237,7 @@ internal static class WorkflowDefinitionLoader
             "wait-for-event"   => StepType.WaitForEvent,
             "switch"           => StepType.Switch,
             "poll"             => StepType.Poll,
+            "trigger-and-wait" => StepType.TriggerAndWait,
             null               => throw new WorkflowDefinitionException(
                                     $"Cannot infer step type for step '{stepName}': no 'activity', 'workflow', or 'type' field.",
                                     workflowContext),

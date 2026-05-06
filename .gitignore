@@ -7,6 +7,9 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
+# Azure Functions localsettings file
+local.settings.json
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

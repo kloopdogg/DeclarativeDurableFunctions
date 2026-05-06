@@ -149,7 +149,30 @@ input:
 
 The instance ID is available as `{{orchestration.instanceId}}` — share it with external agents (via Service Bus, email, etc.) so they can call back via `RaiseEventAsync` or the task-completed endpoint.
 
-### 7. Conditional branching
+### 7. Send-and-wait (fire-and-callback)
+
+Calls an activity and waits for an external callback event concurrently. The event listener is registered **before** the activity is called — this is required to eliminate a race condition where a fast external process raises the callback before the orchestrator has registered interest in it. This race has been observed in production with Azure Service Bus: the activity sends a message, the downstream system processes it and calls `RaiseEventAsync`, and by the time the orchestrator resumes from the activity and reaches a `wait-for-event` step, the event has already been missed (or must be re-delivered). The sequential `activity` → `wait-for-event` pattern is therefore unsafe for this use case.
+
+```yaml
+- name: ProcessOrder
+  type: trigger-and-wait
+  activity: SendOrderToProcessorActivity
+  input: "{{input.order}}"
+  event: OrderProcessed
+  timeout: PT60M
+  on-timeout: fail        # fail (default) | continue
+  output: processingResult
+```
+
+**Send-and-wait semantics:**
+
+- The external event listener is registered first, then the activity is called. Both run concurrently.
+- The step waits for the event and a timer to race. The activity is always awaited before the step completes (it is expected to be fast — a send, not the actual work).
+- If the event fires: the timer is cancelled and the event payload is stored under `output`.
+- If `timeout` elapses: behaves identically to `wait-for-event` — `on-timeout: fail` throws `WorkflowTimeoutException`; `on-timeout: continue` stores `null` and proceeds.
+- If `timeout` is omitted: waits indefinitely for the event (activity is still awaited first).
+
+### 8. Conditional branching
 
 Simple condition on any step:
 
@@ -175,7 +198,7 @@ Switch/case for routing:
       - activity: RouteToGlobalFulfillmentActivity
 ```
 
-### 8. Polling loop
+### 9. Polling loop
 
 Repeatedly calls an activity until a condition is met or a timeout expires. Implemented internally as a sub-orchestration that calls `ContinueAsNew` after each failed check to keep history manageable.
 
@@ -201,7 +224,7 @@ Repeatedly calls an activity until a condition is met or a timeout expires. Impl
 - `ContinueAsNew` resets the orchestration history on each iteration — required for long polling windows (e.g., `PT30D`) where unbounded history growth would otherwise occur.
 - The `until` expression has full access to the expression language: comparisons, logical operators, null checks, nested property access.
 
-### 9. Combinations
+### 10. Combinations
 
 All of the above compose freely. A `parallel` block can contain `foreach` steps. A `foreach` can invoke a sub-orchestration that itself has a `wait-for-event`. A `poll` step can appear inside a `parallel` block. Any nesting depth.
 
