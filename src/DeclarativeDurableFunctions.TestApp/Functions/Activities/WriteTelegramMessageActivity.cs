@@ -4,17 +4,16 @@ using Microsoft.Extensions.Logging;
 
 namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 
-public class WriteTelegramMessageActivity
+public class WriteTelegramMessageActivity(ILogger<WriteTelegramMessageActivity> logger)
 {
     [Function("WriteTelegramMessageActivity")]
     public object RunAsync(
         [ActivityTrigger] JsonElement input,
         FunctionContext context)
     {
-        ILogger logger = context.GetLogger(nameof(WriteTelegramMessageActivity));
- 
         string status = input.GetProperty("status").GetString()!;
         JsonElement data = input.GetProperty("data");
+        
         logger.LogWarning("Writing Telegram message for status: '{Status}' and data: '{Data}'", status, data);
 
         //TODO: Have LLM use the input prompt and the status/schedule result to craft
@@ -22,8 +21,8 @@ public class WriteTelegramMessageActivity
         
         return new
         {
-            telegramMessage = status.ToLower() is "succeeded" or "approved"
-                    ? "Success! <AI-transormed data>"
+            telegramMessage = status.ToLower() is "succeeded" or "approved" or "success" or "completed"
+                    ? $"Success! {data}"
                     : "Failed. Restart the workflow, if necessary."
         };
     }
