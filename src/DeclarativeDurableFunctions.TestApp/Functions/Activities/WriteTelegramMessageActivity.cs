@@ -15,7 +15,7 @@ public class WriteTelegramMessageActivity
  
         string status = input.GetProperty("status").GetString()!;
         JsonElement data = input.GetProperty("data");
-        logger.LogWarning("Writing Telegram message for {Status} and {Data}", status, data);
+        logger.LogWarning("Writing Telegram message for status: '{Status}' and data: '{Data}'", status, data);
 
         //TODO: Have LLM use the input prompt and the status/schedule result to craft
         // a user-friendly message about the schedule availability and details.

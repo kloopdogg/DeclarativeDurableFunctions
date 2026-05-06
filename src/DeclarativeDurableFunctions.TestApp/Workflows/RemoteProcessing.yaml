@@ -1,0 +1,26 @@
+workflow:
+    name: ProcessOrder
+    steps:
+      - name: ValidateOrder
+        activity: ValidateOrderActivity
+        input: "{{input}}"
+        output: validation
+
+      - name: SendToProcessor
+        type: trigger-and-wait
+        activity: SendOrderToProcessorActivity
+        input:
+          orderId: "{{input.orderId}}"
+          callbackInstanceId: "{{orchestration.instanceId}}"
+        event: OrderProcessed
+        timeout: PT1M
+        on-timeout: fail
+        output: processingResult
+
+      - name: NotifyCustomer
+        activity: SendConfirmationEmailActivity
+        input: 
+          customerEmail: "{{input.customerEmail}}"
+          subject: "Order Processed"
+          body: "Your order has been processed ({{processingResult.processingTimeSeconds}}s) with status: {{processingResult.status}}."
+        output: notificationResult

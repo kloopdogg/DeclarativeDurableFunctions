@@ -21,9 +21,7 @@ Content-Type: application/json
 }
 
 ###
-@instanceId = b382310e494844398b760d0fb4e2fa2b
-
-###
+@instanceId = 3a55076c5a044bac99621678957b3b21
 
 ### Generic: Approve
 POST {{host}}/api/events/{{instanceId}}/ApprovalDecision
@@ -43,4 +41,34 @@ Content-Type: application/json
   "decision": "declined",
   "decisionMaker": "director",
   "decisionTimestamp": "2026-05-03T12:00:00Z"
+}
+
+
+### RemoteProcessing: Start workflow
+POST {{host}}/api/workflows/RemoteProcessing
+Content-Type: application/json
+
+{
+  "orderId": "ord-3",
+  "customerId": "cust-1",
+  "customerEmail": "test@example.com",
+  "correlationId": "corr-v2-001",
+  "lineItems": [
+    { "lineItemId": "li-1", "productId": "prod-1", "quantity": 2 }
+  ]
+}
+
+###
+@instanceId = 0c622f5d4ddc4a3aa6d6a558d4d9e2b9
+
+### Check status
+GET {{host}}/runtime/webhooks/durabletask/instances/{{instanceId}}
+
+### Generic: OrderProcessed
+POST {{host}}/api/events/{{instanceId}}/OrderProcessed
+Content-Type: application/json
+
+{
+  "status": "Succeeded",
+  "processingTimeSeconds": 17
 }

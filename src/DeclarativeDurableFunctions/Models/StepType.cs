@@ -9,4 +9,5 @@ internal enum StepType
     WaitForEvent,
     Switch,
     Poll,
+    TriggerAndWait,
 }

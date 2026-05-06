@@ -605,4 +605,109 @@ public class WorkflowDefinitionRegistryTests
             WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadPoll"));
         Assert.Contains("on-timeout", ex.Message);
     }
+
+    // ---- Round-trip: trigger-and-wait ----
+
+    [Fact]
+    public void LoadFromYaml_TriggerAndWait_ParsesAllFields()
+    {
+        const string yaml = """
+            workflow:
+              name: OrderWorkflow
+              steps:
+                - name: SendToProcessor
+                  type: trigger-and-wait
+                  activity: SendOrderToProcessorActivity
+                  input: "{{input.order}}"
+                  event: OrderProcessed
+                  timeout: PT60M
+                  on-timeout: continue
+                  output: processingResult
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "OrderWorkflow").Steps[0];
+
+        Assert.Equal(StepType.TriggerAndWait, step.Type);
+        Assert.Equal("SendOrderToProcessorActivity", step.ActivityName);
+        Assert.Equal("OrderProcessed", step.EventName);
+        Assert.Equal("PT60M", step.Timeout);
+        Assert.Equal("continue", step.OnTimeout);
+        Assert.Equal("processingResult", step.Output);
+    }
+
+    [Fact]
+    public void LoadFromYaml_TriggerAndWait_OptionalFields_Absent_DefaultsApplied()
+    {
+        const string yaml = """
+            workflow:
+              name: OrderWorkflow
+              steps:
+                - name: SendToProcessor
+                  type: trigger-and-wait
+                  activity: SendOrderToProcessorActivity
+                  event: OrderProcessed
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "OrderWorkflow").Steps[0];
+
+        Assert.Equal(StepType.TriggerAndWait, step.Type);
+        Assert.Null(step.Timeout);
+        Assert.Equal("fail", step.OnTimeout);
+        Assert.Null(step.Output);
+    }
+
+    // ---- Validation: trigger-and-wait required fields ----
+
+    [Fact]
+    public void LoadFromYaml_TriggerAndWaitWithoutActivity_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadWorkflow
+              steps:
+                - name: SendToProcessor
+                  type: trigger-and-wait
+                  event: OrderProcessed
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadWorkflow"));
+        Assert.Contains("activity", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_TriggerAndWaitWithoutEvent_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadWorkflow
+              steps:
+                - name: SendToProcessor
+                  type: trigger-and-wait
+                  activity: SendOrderToProcessorActivity
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadWorkflow"));
+        Assert.Contains("event", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_TriggerAndWaitWithInvalidOnTimeout_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadWorkflow
+              steps:
+                - name: SendToProcessor
+                  type: trigger-and-wait
+                  activity: SendOrderToProcessorActivity
+                  event: OrderProcessed
+                  on-timeout: skip
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadWorkflow"));
+        Assert.Contains("on-timeout", ex.Message);
+    }
 }

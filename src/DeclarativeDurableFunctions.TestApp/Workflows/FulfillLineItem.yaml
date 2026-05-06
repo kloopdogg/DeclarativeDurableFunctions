@@ -8,5 +8,8 @@ workflow:
 
     - name: NotifyWarehouse
       activity: SendConfirmationEmailActivity
-      input: "Item {{input.data.lineItemId}} fulfilled"
+      input: 
+        customerEmail: "warehouse@crow.com"
+        subject: "Item fulfilled"
+        body: "Item {{input.data.lineItemId}} has been successfully fulfilled."
       output: warehouseNotification

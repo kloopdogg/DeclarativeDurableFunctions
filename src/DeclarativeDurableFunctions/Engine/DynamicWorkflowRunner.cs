@@ -49,6 +49,7 @@ internal static class DynamicWorkflowRunner
             case StepType.WaitForEvent:     await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
             case StepType.Switch:           await RunSwitch(context, step, execCtx); break;
             case StepType.Poll:             await RunPoll(context, step, execCtx, outputNameOverride); break;
+            case StepType.TriggerAndWait:   await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
         }
     }
 
@@ -215,6 +216,60 @@ internal static class DynamicWorkflowRunner
         using var cts = new CancellationTokenSource();
         var timerTask = context.CreateTimer(context.CurrentUtcDateTime.Add(timeoutSpan), cts.Token);
         var winner = await Task.WhenAny(eventTask, timerTask);
+
+        if (winner == eventTask)
+        {
+            cts.Cancel();
+            var payload = await eventTask;
+            var effectiveOutput = outputNameOverride ?? step.Output;
+            if (effectiveOutput != null)
+                execCtx.SetOutput(effectiveOutput, payload);
+            return;
+        }
+
+        if (step.OnTimeout == "fail")
+            throw new WorkflowTimeoutException(step.Name ?? "(unnamed)", step.Timeout);
+
+        var effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
+        if (effectiveOutputOnTimeout != null)
+            execCtx.SetOutput(effectiveOutputOnTimeout, null);
+    }
+
+    // ---- TriggerAndWait ----
+
+    private static async Task RunTriggerAndWait(
+        TaskOrchestrationContext context,
+        StepDefinition step,
+        WorkflowExecutionContext execCtx,
+        string? outputNameOverride = null)
+    {
+        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+
+        // Register the event listener BEFORE calling the activity — see spec §5.11.
+        // This prevents a race where a fast downstream system raises the callback event
+        // before the orchestrator has expressed interest in it.
+        var eventTask = context.WaitForExternalEvent<JsonElement>(step.EventName!);
+
+        if (string.IsNullOrEmpty(step.Timeout))
+        {
+            // No timeout: fire the trigger, then await the event indefinitely.
+            await context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput);
+            var payload = await eventTask;
+            var effectiveOutput = outputNameOverride ?? step.Output;
+            if (effectiveOutput != null)
+                execCtx.SetOutput(effectiveOutput, payload);
+            return;
+        }
+
+        var timeoutSpan = Iso8601DurationParser.Parse(step.Timeout);
+        using var cts = new CancellationTokenSource();
+        var timerTask = context.CreateTimer(context.CurrentUtcDateTime.Add(timeoutSpan), cts.Token);
+
+        // Activity is called AFTER the event listener and timer are set up.
+        var activityTask = context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput);
+
+        var winner = await Task.WhenAny(eventTask, timerTask);
+        await Task.WhenAll(winner, activityTask);
 
         if (winner == eventTask)
         {
