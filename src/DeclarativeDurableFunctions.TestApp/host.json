@@ -1,6 +1,9 @@
 {
   "version": "2.0",
   "logging": {
+    "logLevel": {
+      "DeclarativeDurableFunctions.TestApp": "Trace"
+    },
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,

@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.7" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.DurableTask" Version="1.16.4" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.27.0" />
     <ProjectReference Include="..\..\src\DeclarativeDurableFunctions\DeclarativeDurableFunctions.csproj" />
   </ItemGroup>
 

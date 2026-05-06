@@ -1,0 +1,27 @@
+workflow:
+  name: RemoteScreenScraping
+  steps:
+
+    - name: SendToRemoteWorker
+      type: trigger-and-wait
+      activity: SendRemoteWorkerSpaScrapingRequestActivity
+      input:
+        url: "{{input.siteUrl}}"
+        instruction: "{{input.prompt}}"
+        correlation_id: "{{orchestration.instanceId}}"
+      event: RemoteWorkCompleted
+      timeout: PT5M
+      on-timeout: fail
+      output: scrapeResult
+
+    - name: CraftTeamNotification
+      activity: WriteTelegramMessageActivity
+      input:
+        data: "{{scrapeResult.result}}"
+        status: "{{scrapeResult.status}}"
+      output: createdNotification
+
+    - name: NotifyTeam
+      activity: SendTelegramMessageActivity
+      input: "{{createdNotification.telegramMessage}}"
+      output: teamNotification
