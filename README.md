@@ -38,15 +38,18 @@ workflow:
         - activity: UpdateInventoryActivity
 ```
 
-Your orchestrator function becomes a stub:
+Register the engine and start workflows via HTTP — no orchestrator code to write:
 
 ```csharp
-public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
-{
-    [Function("OrderFulfillment")]
-    public Task<JsonElement> RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
-        => context.RunWorkflowAsync(registry);
-}
+// Program.cs
+services.AddDeclarativeWorkflows();
+```
+
+```http
+POST /api/workflows/OrderFulfillment
+Content-Type: application/json
+
+{ "orderId": "123", "lineItems": [...] }
 ```
 
 ## Supported workflow patterns
@@ -57,6 +60,8 @@ public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
 - Fan-out over a collection → sub-orchestrations → `Task.WhenAll`
 - Parallel blocks with mixed step types
 - External event waits (human approval, Service Bus callbacks, external agent completion)
+- Trigger-and-wait (fire a trigger activity and await an external callback, race-condition safe)
+- Polling loops (call activity repeatedly until a condition is met, with `ContinueAsNew` for history safety)
 - Conditional steps and switch/case routing
 - Any combination of the above, nested arbitrarily
 
@@ -125,24 +130,13 @@ var host = new HostBuilder()
 await host.RunAsync();
 ```
 
-**3. Write a one-line orchestrator stub:**
-
-```csharp
-public class OrderFulfillmentOrchestrator(IWorkflowDefinitionRegistry registry)
-{
-    [Function("OrderFulfillment")]
-    public Task<JsonElement> RunAsync([OrchestrationTrigger] TaskOrchestrationContext context)
-        => context.RunWorkflowAsync(registry);
-}
-```
-
-That's it. Write your activity functions normally — the YAML drives the orchestration.
+That's it. The framework auto-discovers and registers `GenericOrchestrator`, `StartWorkflow` (`POST /api/workflows/{workflowName}`), and `EventTrigger` (`POST /api/events/{instanceId}/{eventName}`) from the library assembly — no per-workflow stubs required. Write your activity functions normally — the YAML drives the orchestration.
 
 See [`src/DeclarativeDurableFunctions.TestApp`](src/DeclarativeDurableFunctions.TestApp) for a complete working example.
 
 ## Status
 
-**Alpha.** Core engine is complete with full test coverage. All six step types are implemented: activity, sub-orchestration, foreach, parallel, wait-for-event, and switch. See [`docs/vision.md`](docs/vision.md) for the full design including schema reference, expression language, and engine architecture.
+**Alpha.** Core engine is complete with full test coverage. All eight step types are implemented: activity, sub-orchestration, foreach, parallel, wait-for-event, trigger-and-wait, poll, and switch. See [`docs/vision.md`](docs/vision.md) for the full design including schema reference, expression language, and engine architecture.
 
 ## Target platform
 
