@@ -62,6 +62,7 @@ Content-Type: application/json
 - External event waits (human approval, Service Bus callbacks, external agent completion)
 - Trigger-and-wait (fire a trigger activity and await an external callback, race-condition safe)
 - Polling loops (call activity repeatedly until a condition is met, with `ContinueAsNew` for history safety)
+- Retry loops (run any step sequence repeatedly with a long delay between attempts and an overall wall-clock timeout)
 - Conditional steps and switch/case routing
 - Any combination of the above, nested arbitrarily
 
