@@ -42,6 +42,7 @@ The engine has four main parts. Keep them separated:
 | `Foreach` | `items.Select(i => Dispatch(step, i))` → `Task.WhenAll` |
 | `Parallel` | `steps.Select(s => Dispatch(s))` → `Task.WhenAll` |
 | `WaitForEvent` | `context.WaitForExternalEvent<JsonElement>(name)` raced against a timer |
+| `TriggerAndWait` | register `WaitForExternalEvent` first, then `CallActivityAsync` concurrently, race event vs timer |
 | `Switch` | evaluate expression → walk matching case steps |
 | `Poll` | built-in `DeclarativeWorkflowPoller` sub-orchestration: call activity → evaluate `until` → `ContinueAsNew` with delay, or return |
 
@@ -73,6 +74,7 @@ Do not move these back to the test app. Adding this library to a Functions app i
 - **Input envelope convention.** The recommended pattern for passing items into sub-orchestrations is a `parent` / `data` envelope. The package ships `WorkflowInput<TData>` and `WorkflowMetadata` base types to match. Don't break this contract.
 - **`switch` doubles as if-else.** A boolean expression in `on:` evaluates to the lowercase string `"true"` or `"false"`. Case keys must match that casing. `ExpressionEvaluator.Stringify` is the single source of truth for value-to-string coercion — do not duplicate it.
 - **`poll` on-timeout: continue returns the last activity result**, not null. This differs from `wait-for-event` on-timeout: continue, which stores null. The distinction is intentional: a timed-out poll still has a real (if unsatisfying) result; a timed-out event wait has nothing.
+- **`trigger-and-wait` registers the event listener before calling the activity.** Durable Functions does buffer external events durably — `RaiseEventAsync` writes the event to orchestration history immediately, regardless of whether the orchestrator has yet called `WaitForExternalEvent`. The concern is not that the event is strictly lost under ideal conditions. The concern is: (1) registering both before yielding collapses two replay cycles into one, reducing latency; (2) the Azure Storage backend's handling of events that arrive while an orchestration is in a transient state (activity just completed, orchestrator not yet replayed) has been inconsistent across SDK versions and observed to require re-delivery in production. Registering first eliminates the race window entirely rather than relying on buffering behavior that has proven unreliable. The sequential `activity` → `wait-for-event` pattern is therefore unsafe for this use case.
 - **No helper classes.** When shared logic is needed across engine types, extract it to the type that owns the responsibility (e.g. `ExpressionEvaluator.Stringify`) rather than creating a `*Helpers` or `*Utils` class.
 
 ## `WorkflowInput<TData>` — the envelope type
