@@ -10,4 +10,5 @@ internal enum StepType
     Switch,
     Poll,
     TriggerAndWait,
+    Loop,
 }

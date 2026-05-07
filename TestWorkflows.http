@@ -72,3 +72,19 @@ Content-Type: application/json
   "status": "Succeeded",
   "processingTimeSeconds": 17
 }
+
+
+### LoopUntilFound: Start workflow
+POST {{host}}/api/workflows/LoopUntilFound
+Content-Type: application/json
+
+{
+  "siteUrl": "https://build.microsoft.com/en-US/sessions?search=hanselman&sortBy=relevance",
+  "prompt": "Extract the full schedule for Scott Hanselman ('Hanselman') from this page, and only return success if it shows that he is presenting at least one session."
+}
+
+###
+@instanceId = 196cea6cc89f4a19b3ab940e3699560d
+
+### Check status
+GET {{host}}/runtime/webhooks/durabletask/instances/{{instanceId}}
