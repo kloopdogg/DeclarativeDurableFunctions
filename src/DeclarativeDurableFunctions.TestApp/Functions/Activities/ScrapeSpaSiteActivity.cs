@@ -7,7 +7,7 @@ namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 public class ScrapeSpaSiteActivity
 {
     [Function("ScrapeSpaSiteActivity")]
-    public object RunAsync(
+    public static object RunAsync(
         [ActivityTrigger] JsonElement input,
         FunctionContext context)
     {

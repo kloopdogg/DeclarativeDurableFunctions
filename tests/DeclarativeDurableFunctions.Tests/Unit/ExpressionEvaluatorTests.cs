@@ -11,7 +11,7 @@ public class ExpressionEvaluatorTests
 {
     // ---- Helpers ----
 
-    private static WorkflowExecutionContext MakeCtx(
+    static WorkflowExecutionContext MakeCtx(
         string inputJson = "{}",
         string instanceId = "test-instance",
         string? parentInstanceId = null,
@@ -29,19 +29,25 @@ public class ExpressionEvaluatorTests
         var ctx = new WorkflowExecutionContext(input, orchestrationCtx);
 
         if (outputs != null)
+        {
             foreach (var (k, v) in outputs)
+            {
                 ctx.SetOutput(k, v);
+            }
+        }
 
         if (iterationItem.HasValue)
+        {
             ctx = ctx.CreateIterationScope(iterationItem.Value, iterationIndex ?? 0);
+        }
 
         return ctx;
     }
 
-    private static ParentOrchestrationInstance CreateParentInfo(string instanceId)
-        => new ParentOrchestrationInstance(default, instanceId);
+    static ParentOrchestrationInstance CreateParentInfo(string instanceId)
+        => new(default, instanceId);
 
-    private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement;
+    static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement;
 
     // ---- Regression: EvaluateBool bare-path conditions must not throw ----
 
@@ -50,7 +56,7 @@ public class ExpressionEvaluatorTests
     {
         // approval has not been set; condition should be falsy, not throw
         var ctx = MakeCtx();
-        var result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
+        bool result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
         Assert.False(result);
     }
 
@@ -59,7 +65,7 @@ public class ExpressionEvaluatorTests
     {
         // input.optionalFlag does not exist in the input JSON
         var ctx = MakeCtx(inputJson: "{}");
-        var result = ExpressionEvaluator.EvaluateBool("{{input.optionalFlag}}", ctx);
+        bool result = ExpressionEvaluator.EvaluateBool("{{input.optionalFlag}}", ctx);
         Assert.False(result);
     }
 
@@ -67,7 +73,7 @@ public class ExpressionEvaluatorTests
     public void EvaluateBool_BarePathSetVariable_ReturnsTrue()
     {
         var ctx = MakeCtx(outputs: new() { ["approval"] = "yes" });
-        var result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
+        bool result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
         Assert.True(result);
     }
 
@@ -76,7 +82,7 @@ public class ExpressionEvaluatorTests
     {
         // explicit null stored (e.g. on-timeout: continue) → falsy
         var ctx = MakeCtx(outputs: new() { ["approval"] = null });
-        var result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
+        bool result = ExpressionEvaluator.EvaluateBool("{{approval}}", ctx);
         Assert.False(result);
     }
 
@@ -96,34 +102,34 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void Evaluate_WholeValueObject_PreservesJsonElement()
     {
-        var ctx = MakeCtx(inputJson: """{"a":1}""");
-        var result = ExpressionEvaluator.Evaluate("{{input}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"a":1}""");
+        object? result = ExpressionEvaluator.Evaluate("{{input}}", ctx);
         Assert.IsType<JsonElement>(result);
-        Assert.Equal(JsonValueKind.Object, ((JsonElement)result!).ValueKind);
+        Assert.Equal(JsonValueKind.Object, ((JsonElement)result).ValueKind);
     }
 
     [Fact]
     public void Evaluate_WholeValueArray_PreservesJsonElement()
     {
-        var ctx = MakeCtx(inputJson: """{"items":[1,2,3]}""");
-        var result = ExpressionEvaluator.Evaluate("{{input.items}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"items":[1,2,3]}""");
+        object? result = ExpressionEvaluator.Evaluate("{{input.items}}", ctx);
         Assert.IsType<JsonElement>(result);
-        Assert.Equal(JsonValueKind.Array, ((JsonElement)result!).ValueKind);
+        Assert.Equal(JsonValueKind.Array, ((JsonElement)result).ValueKind);
     }
 
     [Fact]
     public void Evaluate_WholeValueNumber_PreservesNumericType()
     {
-        var ctx = MakeCtx(inputJson: """{"total":42}""");
-        var result = ExpressionEvaluator.Evaluate("{{input.total}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"total":42}""");
+        object? result = ExpressionEvaluator.Evaluate("{{input.total}}", ctx);
         Assert.Equal(42L, result);
     }
 
     [Fact]
     public void Evaluate_WholeValueBool_PreservesBoolType()
     {
-        var ctx = MakeCtx(inputJson: """{"flag":true}""");
-        var result = ExpressionEvaluator.Evaluate("{{input.flag}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"flag":true}""");
+        object? result = ExpressionEvaluator.Evaluate("{{input.flag}}", ctx);
         Assert.Equal(true, result);
     }
 
@@ -132,16 +138,16 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void Evaluate_EmbeddedInterpolation_ReturnsString()
     {
-        var ctx = MakeCtx(inputJson: """{"id":"X1"}""");
-        var result = ExpressionEvaluator.Evaluate("Order {{input.id}} received", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"id":"X1"}""");
+        object? result = ExpressionEvaluator.Evaluate("Order {{input.id}} received", ctx);
         Assert.Equal("Order X1 received", result);
     }
 
     [Fact]
     public void Evaluate_EmbeddedInterpolationNumber_StringifiesNumber()
     {
-        var ctx = MakeCtx(inputJson: """{"count":5}""");
-        var result = ExpressionEvaluator.Evaluate("Count: {{input.count}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"count":5}""");
+        object? result = ExpressionEvaluator.Evaluate("Count: {{input.count}}", ctx);
         Assert.Equal("Count: 5", result);
     }
 
@@ -150,8 +156,8 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void Evaluate_NestedPropertyAccess()
     {
-        var ctx = MakeCtx(inputJson: """{"a":{"b":42}}""");
-        var result = ExpressionEvaluator.Evaluate("{{input.a.b}}", ctx);
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"a":{"b":42}}""");
+        object? result = ExpressionEvaluator.Evaluate("{{input.a.b}}", ctx);
         Assert.Equal(42L, result);
     }
 
@@ -160,9 +166,9 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void Evaluate_Item_ReturnsCurrentItem()
     {
-        var item = Json("""{"name":"foo"}""");
+        var item = Json(/*lang=json,strict*/ """{"name":"foo"}""");
         var ctx = MakeCtx().CreateIterationScope(item, 0);
-        var result = ExpressionEvaluator.Evaluate("{{$item.name}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{$item.name}}", ctx);
         Assert.Equal("foo", result);
     }
 
@@ -171,7 +177,7 @@ public class ExpressionEvaluatorTests
     {
         var item = Json("{}");
         var ctx = MakeCtx().CreateIterationScope(item, 2);
-        var result = ExpressionEvaluator.Evaluate("{{$index}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{$index}}", ctx);
         Assert.Equal(2, result);
     }
 
@@ -189,7 +195,7 @@ public class ExpressionEvaluatorTests
     public void Evaluate_InstanceId_ReturnsContextInstanceId()
     {
         var ctx = MakeCtx(instanceId: "orch-abc");
-        var result = ExpressionEvaluator.Evaluate("{{orchestration.instanceId}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{orchestration.instanceId}}", ctx);
         Assert.Equal("orch-abc", result);
     }
 
@@ -197,7 +203,7 @@ public class ExpressionEvaluatorTests
     public void Evaluate_ParentInstanceId_WhenPresent()
     {
         var ctx = MakeCtx(parentInstanceId: "parent-xyz");
-        var result = ExpressionEvaluator.Evaluate("{{orchestration.parentInstanceId}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{orchestration.parentInstanceId}}", ctx);
         Assert.Equal("parent-xyz", result);
     }
 
@@ -205,7 +211,7 @@ public class ExpressionEvaluatorTests
     public void Evaluate_ParentInstanceId_WhenAbsentReturnsNull()
     {
         var ctx = MakeCtx();
-        var result = ExpressionEvaluator.Evaluate("{{orchestration.parentInstanceId}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{orchestration.parentInstanceId}}", ctx);
         Assert.Null(result);
     }
 
@@ -214,9 +220,9 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void Evaluate_StepOutputReference_ReturnsStoredValue()
     {
-        var output = Json("""{"result":99}""");
+        var output = Json(/*lang=json,strict*/ """{"result":99}""");
         var ctx = MakeCtx(outputs: new() { ["stepA"] = output });
-        var result = ExpressionEvaluator.Evaluate("{{stepA.result}}", ctx);
+        object? result = ExpressionEvaluator.Evaluate("{{stepA.result}}", ctx);
         Assert.Equal(99L, result);
     }
 
@@ -225,21 +231,21 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void EvaluateBool_GreaterThan_True()
     {
-        var ctx = MakeCtx(inputJson: """{"total":15}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"total":15}""");
         Assert.True(ExpressionEvaluator.EvaluateBool("{{input.total > 10}}", ctx));
     }
 
     [Fact]
     public void EvaluateBool_GreaterThan_False()
     {
-        var ctx = MakeCtx(inputJson: """{"total":5}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"total":5}""");
         Assert.False(ExpressionEvaluator.EvaluateBool("{{input.total > 10}}", ctx));
     }
 
     [Fact]
     public void EvaluateBool_Equality_DoubleQuotedString_True()
     {
-        var ctx = MakeCtx(inputJson: """{"region":"EU"}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"region":"EU"}""");
         Assert.True(ExpressionEvaluator.EvaluateBool("""{{input.region == "EU"}}""", ctx));
     }
 
@@ -247,21 +253,21 @@ public class ExpressionEvaluatorTests
     public void EvaluateBool_Equality_SingleQuotedString_True()
     {
         // Single-quoted strings are valid inside expressions when the YAML value is double-quoted
-        var ctx = MakeCtx(inputJson: """{"status":"Schedule Found"}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"status":"Schedule Found"}""");
         Assert.True(ExpressionEvaluator.EvaluateBool("{{input.status == 'Schedule Found'}}", ctx));
     }
 
     [Fact]
     public void EvaluateBool_Equality_SingleQuotedString_False()
     {
-        var ctx = MakeCtx(inputJson: """{"status":"Pending"}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"status":"Pending"}""");
         Assert.False(ExpressionEvaluator.EvaluateBool("{{input.status == 'Schedule Found'}}", ctx));
     }
 
     [Fact]
     public void EvaluateBool_And_True()
     {
-        var ctx = MakeCtx(inputJson: """{"a":1,"b":"x"}""");
+        var ctx = MakeCtx(inputJson: /*lang=json,strict*/ """{"a":1,"b":"x"}""");
         Assert.True(ExpressionEvaluator.EvaluateBool("{{input.a > 0 && input.b != null}}", ctx));
     }
 

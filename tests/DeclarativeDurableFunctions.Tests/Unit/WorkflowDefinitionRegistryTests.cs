@@ -38,7 +38,7 @@ public class WorkflowDefinitionRegistryTests
         Assert.Equal("validationResult", step.Output);
 
         Assert.NotNull(step.Retry);
-        Assert.Equal(3, step.Retry!.MaxAttempts);
+        Assert.Equal(3, step.Retry.MaxAttempts);
         Assert.Equal("PT5S", step.Retry.FirstRetryInterval);
     }
 
@@ -425,7 +425,7 @@ public class WorkflowDefinitionRegistryTests
             ["MyWorkflow"] = def
         });
 
-        var found = registry.TryGet("MyWorkflow", out var result);
+        bool found = registry.TryGet("MyWorkflow", out var result);
         Assert.True(found);
         Assert.NotNull(result);
     }
@@ -435,7 +435,7 @@ public class WorkflowDefinitionRegistryTests
     {
         var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>());
 
-        var found = registry.TryGet("Missing", out var result);
+        bool found = registry.TryGet("Missing", out var result);
         Assert.False(found);
         Assert.Null(result);
     }

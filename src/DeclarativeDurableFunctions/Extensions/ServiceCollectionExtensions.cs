@@ -17,13 +17,13 @@ public static class ServiceCollectionExtensions
         var options = new WorkflowDefinitionRegistryOptions();
         configure?.Invoke(options);
 
-        var directory = Path.IsPathRooted(options.WorkflowsDirectory)
+        string directory = Path.IsPathRooted(options.WorkflowsDirectory)
             ? options.WorkflowsDirectory
             : Path.Combine(AppContext.BaseDirectory, options.WorkflowsDirectory);
 
         var definitions = WorkflowDefinitionLoader.LoadAll(directory);
         var registry = new WorkflowDefinitionRegistry(definitions);
-        services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
+        _ = services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
         return services;
     }
 }

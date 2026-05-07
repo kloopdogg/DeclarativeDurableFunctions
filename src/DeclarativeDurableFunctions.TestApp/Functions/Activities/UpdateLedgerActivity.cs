@@ -6,9 +6,7 @@ namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 public class UpdateLedgerActivity
 {
     [Function("UpdateLedgerActivity")]
-    public object RunAsync(
-        [ActivityTrigger] JsonElement fulfillmentResults,
-        FunctionContext context)
+    public static object RunAsync([ActivityTrigger] JsonElement fulfillmentResults)
         => new
         {
             ledgerId = Guid.NewGuid().ToString(),

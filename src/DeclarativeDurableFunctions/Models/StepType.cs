@@ -1,6 +1,6 @@
 namespace DeclarativeDurableFunctions.Models;
 
-internal enum StepType
+enum StepType
 {
     Activity,
     SubOrchestration,

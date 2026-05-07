@@ -7,12 +7,10 @@ namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 public class WriteTelegramMessageActivity(ILogger<WriteTelegramMessageActivity> logger)
 {
     [Function("WriteTelegramMessageActivity")]
-    public object RunAsync(
-        [ActivityTrigger] JsonElement input,
-        FunctionContext context)
+    public object RunAsync([ActivityTrigger] JsonElement input)
     {
         string status = input.GetProperty("status").GetString()!;
-        JsonElement data = input.GetProperty("data");
+        var data = input.GetProperty("data");
         
         logger.LogWarning("Writing Telegram message for status: '{Status}' and data: '{Data}'", status, data);
 
@@ -21,7 +19,7 @@ public class WriteTelegramMessageActivity(ILogger<WriteTelegramMessageActivity> 
         
         return new
         {
-            telegramMessage = status.ToLower() is "succeeded" or "approved" or "success" or "completed"
+            telegramMessage = status.ToLower(System.Globalization.CultureInfo.CurrentCulture) is "succeeded" or "approved" or "success" or "completed"
                     ? $"Success! {data}"
                     : "Failed. Restart the workflow, if necessary."
         };

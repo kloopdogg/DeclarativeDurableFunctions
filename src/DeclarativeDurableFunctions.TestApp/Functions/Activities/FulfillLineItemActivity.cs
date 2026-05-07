@@ -7,13 +7,10 @@ namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 public class FulfillLineItemActivity
 {
     [Function("FulfillLineItemActivity")]
-    public object RunAsync(
-        [ActivityTrigger] WorkflowInput<LineItem> input,
-        FunctionContext context)
-        => new
-        {
-            fulfillmentId = Guid.NewGuid().ToString(),
-            lineItemId = input.Data.LineItemId,
-            status = "fulfilled"
-        };
+    public static object RunAsync([ActivityTrigger] WorkflowInput<LineItem> input) => new
+    {
+        fulfillmentId = Guid.NewGuid().ToString(),
+        lineItemId = input.Data.LineItemId,
+        status = "fulfilled"
+    };
 }

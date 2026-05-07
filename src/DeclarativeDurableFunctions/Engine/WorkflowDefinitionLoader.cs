@@ -4,22 +4,26 @@ using YamlDotNet.Serialization;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal static class WorkflowDefinitionLoader
+static class WorkflowDefinitionLoader
 {
-    private static readonly IDeserializer Deserializer = new DeserializerBuilder().Build();
+    static readonly IDeserializer Deserializer = new DeserializerBuilder().Build();
 
     public static IReadOnlyDictionary<string, WorkflowDefinition> LoadAll(string directory)
     {
         if (!Directory.Exists(directory))
+        {
             throw new WorkflowDefinitionException($"Workflows directory '{directory}' does not exist.");
+        }
 
         var definitions = new Dictionary<string, WorkflowDefinition>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(directory, "*.yaml"))
+        foreach (string file in Directory.EnumerateFiles(directory, "*.yaml"))
         {
-            var workflowName = Path.GetFileNameWithoutExtension(file);
-            var yaml = File.ReadAllText(file);
+            string workflowName = Path.GetFileNameWithoutExtension(file);
+            string yaml = File.ReadAllText(file);
             foreach (var (k, v) in LoadFromYamlAll(yaml, workflowName))
+            {
                 definitions[k] = v;
+            }
         }
         return definitions;
     }
@@ -39,7 +43,7 @@ internal static class WorkflowDefinitionLoader
         return accumulator;
     }
 
-    private static WorkflowDefinition LoadFromYamlCore(
+    static WorkflowDefinition LoadFromYamlCore(
         string yaml, string workflowName, Dictionary<string, WorkflowDefinition> accumulator)
     {
         Dictionary<object, object> root;
@@ -58,7 +62,7 @@ internal static class WorkflowDefinitionLoader
         var workflowNode = GetDict(root, "workflow")
             ?? throw new WorkflowDefinitionException("Missing 'workflow' key.", workflowName);
 
-        var displayName = GetString(workflowNode, "name");
+        string? displayName = GetString(workflowNode, "name");
         var stepsRaw = GetList(workflowNode, "steps")
             ?? throw new WorkflowDefinitionException(
                 "'workflow.steps' is required and must be a sequence.", workflowName);
@@ -71,32 +75,37 @@ internal static class WorkflowDefinitionLoader
         };
     }
 
-    private static IReadOnlyList<StepDefinition> ParseSteps(
+#pragma warning disable CA1859 // Use concrete types when possible for improved performance
+    static IReadOnlyList<StepDefinition> ParseSteps(
+#pragma warning restore CA1859 // Use concrete types when possible for improved performance
         List<object> stepsRaw, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
         var steps = new List<StepDefinition>(stepsRaw.Count);
-        foreach (var raw in stepsRaw)
+        foreach (object raw in stepsRaw)
         {
             if (raw is not Dictionary<object, object> stepDict)
+            {
                 throw new WorkflowDefinitionException(
                     $"A step in workflow '{workflowContext}' is not a mapping.", workflowContext);
+            }
+
             steps.Add(ParseStep(stepDict, workflowContext, accumulator));
         }
         return steps.AsReadOnly();
     }
 
-    private static StepDefinition ParseStep(
+    static StepDefinition ParseStep(
         Dictionary<object, object> dict, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
-        var name = GetString(dict, "name");
-        var typeStr = GetString(dict, "type");
-        var activityName = GetString(dict, "activity");
-        var stepWorkflow = GetString(dict, "workflow");
-        var input = GetRaw(dict, "input");
-        var output = GetString(dict, "output");
-        var condition = GetString(dict, "condition");
-        var instanceId = GetString(dict, "instanceId") ?? GetString(dict, "instance-id");
-        var source = GetString(dict, "source");
+        string? name = GetString(dict, "name");
+        string? typeStr = GetString(dict, "type");
+        string? activityName = GetString(dict, "activity");
+        string? stepWorkflow = GetString(dict, "workflow");
+        object? input = GetRaw(dict, "input");
+        string? output = GetString(dict, "output");
+        string? condition = GetString(dict, "condition");
+        string? instanceId = GetString(dict, "instanceId") ?? GetString(dict, "instance-id");
+        string? source = GetString(dict, "source");
 
         var retryDict = GetDict(dict, "retry");
         var retry = retryDict != null ? ParseRetryPolicy(retryDict, workflowContext, name) : null;
@@ -106,7 +115,7 @@ internal static class WorkflowDefinitionLoader
         IReadOnlyList<StepDefinition> subSteps = [];
         string? eventName = null;
         string? timeout = null;
-        var onTimeout = "fail";
+        string onTimeout = "fail";
         string? switchOn = null;
         IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> cases =
             new Dictionary<string, IReadOnlyList<StepDefinition>>();
@@ -115,125 +124,149 @@ internal static class WorkflowDefinitionLoader
         string? breakWhen = null;
         string? loopWorkflowName = null;
 
+#pragma warning disable IDE0010 // Add missing cases
         switch (stepType)
         {
             case StepType.Foreach:
                 if (source == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (foreach) is missing required 'source' field.", workflowContext);
+                }
+
                 if (activityName != null && stepWorkflow != null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (foreach) must have exactly one of 'activity' or 'workflow', not both.",
                         workflowContext);
+                }
+
                 if (activityName == null && stepWorkflow == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (foreach) must have 'activity' or 'workflow'.", workflowContext);
+                }
+
                 break;
 
             case StepType.Parallel:
-                var parallelStepsRaw = GetList(dict, "steps");
-                if (parallelStepsRaw == null)
-                    throw new WorkflowDefinitionException(
+                var parallelStepsRaw = GetList(dict, "steps") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (parallel) is missing required 'steps' sequence.", workflowContext);
                 subSteps = ParseSteps(parallelStepsRaw, workflowContext, accumulator);
                 foreach (var child in subSteps)
                 {
                     if (child.Output != null)
+                    {
                         throw new WorkflowDefinitionException(
                             $"Step '{child.Name}' inside parallel block '{name}': 'output:' is not valid on parallel child steps. " +
                             $"Branch results are keyed by step name and collected via the block's own 'output:' field.",
                             workflowContext);
+                    }
                 }
                 break;
 
             case StepType.WaitForEvent:
-                eventName = GetString(dict, "event");
-                if (eventName == null)
-                    throw new WorkflowDefinitionException(
+                eventName = GetString(dict, "event") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (wait-for-event) is missing required 'event' field.", workflowContext);
                 timeout = GetString(dict, "timeout");
                 onTimeout = GetString(dict, "on-timeout") ?? "fail";
-                if (onTimeout != "fail" && onTimeout != "continue")
+                if (onTimeout is not "fail" and not "continue")
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
+                }
+
                 break;
 
             case StepType.Switch:
-                switchOn = GetString(dict, "on");
-                if (switchOn == null)
-                    throw new WorkflowDefinitionException(
+                switchOn = GetString(dict, "on") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (switch) is missing required 'on' field.", workflowContext);
-                var casesRaw = GetDict(dict, "cases");
-                if (casesRaw == null)
-                    throw new WorkflowDefinitionException(
+
+                var casesRaw = GetDict(dict, "cases") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (switch) is missing required 'cases' field.", workflowContext);
                 cases = ParseCases(casesRaw, workflowContext, accumulator);
                 break;
 
             case StepType.Poll:
                 if (activityName == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (poll) is missing required 'activity' field.", workflowContext);
+                }
+
                 if (output == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (poll) is missing required 'output' field. " +
                         "The output name is used in the 'until' expression to reference the activity result.",
                         workflowContext);
-                until = GetString(dict, "until");
-                if (until == null)
-                    throw new WorkflowDefinitionException(
+                }
+
+                until = GetString(dict, "until") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (poll) is missing required 'until' field.", workflowContext);
-                delay = GetString(dict, "delay");
-                if (delay == null)
-                    throw new WorkflowDefinitionException(
+
+                delay = GetString(dict, "delay") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (poll) is missing required 'delay' field.", workflowContext);
                 timeout = GetString(dict, "timeout");
                 onTimeout = GetString(dict, "on-timeout") ?? "fail";
-                if (onTimeout != "fail" && onTimeout != "continue")
+                if (onTimeout is not "fail" and not "continue")
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
+                }
+
                 break;
 
             case StepType.TriggerAndWait:
                 if (activityName == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (trigger-and-wait) is missing required 'activity' field.", workflowContext);
+                }
+
                 eventName = GetString(dict, "event") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (trigger-and-wait) is missing required 'event' field.", workflowContext);
                 timeout = GetString(dict, "timeout");
                 onTimeout = GetString(dict, "on-timeout") ?? "fail";
-                if (onTimeout != "fail" && onTimeout != "continue")
+                if (onTimeout is not "fail" and not "continue")
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
+                }
+
                 break;
 
             case StepType.Loop:
                 if (name == null)
+                {
                     throw new WorkflowDefinitionException(
                         "Loop steps must have a 'name' field.", workflowContext);
+                }
+
                 if (output == null)
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (loop) is missing required 'output' field.", workflowContext);
-                breakWhen = GetString(dict, "break-when");
-                if (breakWhen == null)
-                    throw new WorkflowDefinitionException(
+                }
+
+                breakWhen = GetString(dict, "break-when") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (loop) is missing required 'break-when' field.", workflowContext);
-                delay = GetString(dict, "delay");
-                if (delay == null)
-                    throw new WorkflowDefinitionException(
+
+                delay = GetString(dict, "delay") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (loop) is missing required 'delay' field.", workflowContext);
                 timeout = GetString(dict, "max-duration");
                 onTimeout = GetString(dict, "on-timeout") ?? "fail";
-                if (onTimeout != "fail" && onTimeout != "continue")
+                if (onTimeout is not "fail" and not "continue")
+                {
                     throw new WorkflowDefinitionException(
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
-                var loopStepsRaw = GetList(dict, "steps");
-                if (loopStepsRaw == null)
-                    throw new WorkflowDefinitionException(
+                }
+
+                var loopStepsRaw = GetList(dict, "steps") ?? throw new WorkflowDefinitionException(
                         $"Step '{name}' (loop) is missing required 'steps' sequence.", workflowContext);
                 subSteps = ParseSteps(loopStepsRaw, workflowContext, accumulator);
                 loopWorkflowName = $"__loop__{workflowContext}__{name}";
@@ -243,7 +276,12 @@ internal static class WorkflowDefinitionLoader
                     Steps = subSteps
                 };
                 break;
+            case StepType.Activity:
+                break;
+            case StepType.SubOrchestration:
+                break;
         }
+#pragma warning restore IDE0010 // Add missing cases
 
         return new StepDefinition
         {
@@ -270,23 +308,26 @@ internal static class WorkflowDefinitionLoader
         };
     }
 
-    private static StepType InferStepType(
+    static StepType InferStepType(
         string? typeStr, string? activityName, string? stepWorkflow,
         string workflowContext, string? stepName)
     {
         // foreach can be combined with activity or workflow
         if (typeStr == "foreach")
+        {
             return StepType.Foreach;
+        }
 
         // activity field present → Activity (no type required)
         if (activityName != null && (typeStr == null || typeStr == "activity"))
+        {
             return StepType.Activity;
+        }
 
         // workflow field present, no type → SubOrchestration
-        if (stepWorkflow != null && typeStr == null)
-            return StepType.SubOrchestration;
-
-        return typeStr switch
+        return stepWorkflow != null && typeStr == null
+            ? StepType.SubOrchestration
+            : typeStr switch
         {
             "activity"         => StepType.Activity,
             "sub-orchestration"=> StepType.SubOrchestration,
@@ -304,30 +345,34 @@ internal static class WorkflowDefinitionLoader
         };
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> ParseCases(
+#pragma warning disable CA1859 // Use concrete types when possible for improved performance
+    static IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> ParseCases(
+#pragma warning restore CA1859 // Use concrete types when possible for improved performance
         Dictionary<object, object> casesDict, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
         var result = new Dictionary<string, IReadOnlyList<StepDefinition>>(StringComparer.Ordinal);
         foreach (var (key, value) in casesDict)
         {
-            var caseKey = key.ToString()!;
+            string caseKey = key.ToString()!;
             if (value is not List<object> stepsRaw)
+            {
                 throw new WorkflowDefinitionException(
                     $"Switch case '{caseKey}' must be a sequence of steps.", workflowContext);
+            }
+
             result[caseKey] = ParseSteps(stepsRaw, workflowContext, accumulator);
         }
         return result;
     }
 
-    private static AppRetryPolicy ParseRetryPolicy(
+    static AppRetryPolicy ParseRetryPolicy(
         Dictionary<object, object> dict, string workflowContext, string? stepName)
     {
-        var maxAttempts = GetInt(dict, "maxAttempts") ?? GetInt(dict, "max-attempts") ?? 1;
-        if (maxAttempts < 1)
-            throw new WorkflowDefinitionException(
-                $"retry.maxAttempts must be >= 1 on step '{stepName}'.", workflowContext);
-
-        return new AppRetryPolicy
+        int maxAttempts = GetInt(dict, "maxAttempts") ?? GetInt(dict, "max-attempts") ?? 1;
+        return maxAttempts < 1
+            ? throw new WorkflowDefinitionException(
+                $"retry.maxAttempts must be >= 1 on step '{stepName}'.", workflowContext)
+            : new AppRetryPolicy
         {
             MaxAttempts = maxAttempts,
             FirstRetryInterval = GetString(dict, "firstRetryInterval")
@@ -341,41 +386,37 @@ internal static class WorkflowDefinitionLoader
 
     // ---- Dictionary helpers ----
 
-    private static Dictionary<object, object>? GetDict(Dictionary<object, object> dict, string key)
-        => dict.TryGetValue(key, out var val) ? val as Dictionary<object, object> : null;
+    static Dictionary<object, object>? GetDict(Dictionary<object, object> dict, string key)
+        => dict.TryGetValue(key, out object? val) ? val as Dictionary<object, object> : null;
 
-    private static List<object>? GetList(Dictionary<object, object> dict, string key)
-        => dict.TryGetValue(key, out var val) ? val as List<object> : null;
+    static List<object>? GetList(Dictionary<object, object> dict, string key)
+        => dict.TryGetValue(key, out object? val) ? val as List<object> : null;
 
-    private static string? GetString(Dictionary<object, object> dict, string key)
-        => dict.TryGetValue(key, out var val) ? val?.ToString() : null;
+    static string? GetString(Dictionary<object, object> dict, string key)
+        => dict.TryGetValue(key, out object? val) ? val?.ToString() : null;
 
-    private static object? GetRaw(Dictionary<object, object> dict, string key)
-        => dict.TryGetValue(key, out var val) ? val : null;
+    static object? GetRaw(Dictionary<object, object> dict, string key)
+        => dict.TryGetValue(key, out object? val) ? val : null;
 
-    private static int? GetInt(Dictionary<object, object> dict, string key)
-    {
-        if (!dict.TryGetValue(key, out var val)) return null;
-        return val switch
-        {
-            int i => i,
-            long l => (int)l,
-            string s when int.TryParse(s, out var r) => r,
-            _ => null
-        };
-    }
+    static int? GetInt(Dictionary<object, object> dict, string key) => !dict.TryGetValue(key, out object? val)
+            ? null
+            : val switch
+            {
+                int i => i,
+                long l => (int)l,
+                string s when int.TryParse(s, out int r) => r,
+                _ => null
+            };
 
-    private static double? GetDouble(Dictionary<object, object> dict, string key)
-    {
-        if (!dict.TryGetValue(key, out var val)) return null;
-        return val switch
-        {
-            double d => d,
-            float f => f,
-            int i => i,
-            long l => l,
-            string s when double.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, out var r) => r,
-            _ => null
-        };
-    }
+    static double? GetDouble(Dictionary<object, object> dict, string key) => !dict.TryGetValue(key, out object? val)
+            ? null
+            : val switch
+            {
+                double d => d,
+                float f => f,
+                int i => i,
+                long l => l,
+                string s when double.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, out double r) => r,
+                _ => null
+            };
 }

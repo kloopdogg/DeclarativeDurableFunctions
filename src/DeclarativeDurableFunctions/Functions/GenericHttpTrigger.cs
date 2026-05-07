@@ -8,10 +8,11 @@ namespace DeclarativeDurableFunctions.Functions;
 
 public class GenericHttpTrigger
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    internal const string FunctionName = "StartWorkflow";
+    static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    [Function("StartWorkflow")]
-    public async Task<HttpResponseData> StartAsync(
+    [Function(FunctionName)]
+    public static async Task<HttpResponseData> StartAsync(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "workflows/{workflowName}")] HttpRequestData req,
         string workflowName,
         [DurableClient] DurableTaskClient client)
@@ -23,7 +24,7 @@ public class GenericHttpTrigger
             ["__input"] = input
         };
 
-        var instanceId = await client.ScheduleNewOrchestrationInstanceAsync(GenericOrchestrator.FunctionName, envelope);
+        string instanceId = await client.ScheduleNewOrchestrationInstanceAsync(GenericOrchestrator.FunctionName, envelope);
 
         var response = req.CreateResponse(HttpStatusCode.Accepted);
         response.Headers.Add("Content-Type", "application/json");

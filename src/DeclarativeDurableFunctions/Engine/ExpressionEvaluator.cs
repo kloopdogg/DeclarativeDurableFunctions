@@ -4,15 +4,13 @@ using DeclarativeDurableFunctions.Exceptions;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal static class ExpressionEvaluator
+static partial class ExpressionEvaluator
 {
     // Matches a YAML value that is entirely a single {{...}} expression.
-    private static readonly Regex SingleExpr =
-        new(@"^\s*\{\{(.+?)\}\}\s*$", RegexOptions.Compiled | RegexOptions.Singleline);
+    static readonly Regex SingleExpr = SingleExprRegex();
 
     // Matches any {{...}} token within a string for interpolation.
-    private static readonly Regex AllTokens =
-        new(@"\{\{(.+?)\}\}", RegexOptions.Compiled | RegexOptions.Singleline);
+    static readonly Regex AllTokens = AllTokensRegex();
 
     /// <summary>
     /// Evaluates a YAML value that may contain {{...}} expressions.
@@ -22,13 +20,11 @@ internal static class ExpressionEvaluator
     public static object? Evaluate(string expression, WorkflowExecutionContext ctx)
     {
         var single = SingleExpr.Match(expression);
-        if (single.Success)
-            return EvaluateInner(single.Groups[1].Value.Trim(), expression, ctx);
-
-        if (!expression.Contains("{{"))
-            return expression;
-
-        return AllTokens.Replace(expression, m =>
+        return single.Success
+            ? EvaluateInner(single.Groups[1].Value.Trim(), expression, ctx)
+            : !expression.Contains("{{")
+            ? expression
+            : AllTokens.Replace(expression, m =>
             Stringify(EvaluateInner(m.Groups[1].Value.Trim(), expression, ctx)));
     }
 
@@ -39,35 +35,35 @@ internal static class ExpressionEvaluator
     public static bool EvaluateBool(string expression, WorkflowExecutionContext ctx)
     {
         var single = SingleExpr.Match(expression);
-        var inner = single.Success ? single.Groups[1].Value.Trim() : expression.Trim();
-        var result = EvaluateInner(inner, expression, ctx, isCondition: true);
+        string inner = single.Success ? single.Groups[1].Value.Trim() : expression.Trim();
+        object? result = EvaluateInner(inner, expression, ctx, isCondition: true);
         return IsTruthy(result);
     }
 
     /// <summary>
     /// Resolves an input template (string expression, nested dictionary, or list) against the context.
     /// </summary>
-    public static object? ResolveInputTemplate(object? inputTemplate, WorkflowExecutionContext ctx)
+    public static object? ResolveInputTemplate(object? inputTemplate, WorkflowExecutionContext ctx) => inputTemplate switch
     {
-        return inputTemplate switch
-        {
-            null => null,
-            string s => Evaluate(s, ctx),
-            Dictionary<object, object> dict => ResolveDict(dict, ctx),
-            List<object> list => list.Select(item => ResolveInputTemplate(item, ctx)).ToList(),
-            _ => inputTemplate
-        };
-    }
+        null => null,
+        string s => Evaluate(s, ctx),
+        Dictionary<object, object> dict => ResolveDict(dict, ctx),
+        List<object> list => list.Select(item => ResolveInputTemplate(item, ctx)).ToList(),
+        _ => inputTemplate
+    };
 
-    private static Dictionary<string, object?> ResolveDict(Dictionary<object, object> dict, WorkflowExecutionContext ctx)
+    static Dictionary<string, object?> ResolveDict(Dictionary<object, object> dict, WorkflowExecutionContext ctx)
     {
         var result = new Dictionary<string, object?>(dict.Count);
         foreach (var (key, value) in dict)
+        {
             result[key.ToString()!] = ResolveInputTemplate(value, ctx);
+        }
+
         return result;
     }
 
-    private static object? EvaluateInner(string inner, string fullExpression, WorkflowExecutionContext ctx, bool isCondition = false)
+    static object? EvaluateInner(string inner, string fullExpression, WorkflowExecutionContext ctx, bool isCondition = false)
     {
         try
         {
@@ -83,7 +79,7 @@ internal static class ExpressionEvaluator
         }
     }
 
-    private static object? EvalNode(ExprNode node, WorkflowExecutionContext ctx, string expr, bool isCondition)
+    static object? EvalNode(ExprNode node, WorkflowExecutionContext ctx, string expr, bool isCondition)
         => node switch
         {
             LiteralNode lit   => lit.Value,
@@ -93,10 +89,14 @@ internal static class ExpressionEvaluator
             _ => throw new WorkflowExpressionException(expr, "Unknown AST node type")
         };
 
-    private static object? ResolvePath(string[] segments, WorkflowExecutionContext ctx, string expr, bool isCondition)
+    static object? ResolvePath(string[] segments, WorkflowExecutionContext ctx, string expr, bool isCondition)
     {
-        if (segments.Length == 0) return null;
-        var root = segments[0];
+        if (segments.Length == 0)
+        {
+            return null;
+        }
+
+        string root = segments[0];
 
         switch (root)
         {
@@ -105,17 +105,26 @@ internal static class ExpressionEvaluator
 
             case "$item":
                 if (!ctx.IterationItem.HasValue)
+                {
                     throw new WorkflowExpressionException(expr, "$item is not available outside a foreach step");
+                }
+
                 return TraverseJsonElement(ctx.IterationItem.Value, segments, 1, expr, isCondition);
 
             case "$index":
                 if (!ctx.IterationIndex.HasValue)
+                {
                     throw new WorkflowExpressionException(expr, "$index is not available outside a foreach step");
+                }
+
                 return ctx.IterationIndex.Value;
 
             case "orchestration":
                 if (segments.Length < 2)
+                {
                     throw new WorkflowExpressionException(expr, "'orchestration' requires a property name");
+                }
+
                 return segments[1] switch
                 {
                     "instanceId"       => ctx.InstanceId,
@@ -126,34 +135,48 @@ internal static class ExpressionEvaluator
             default:
                 if (!ctx.HasOutput(root))
                 {
-                    if (isCondition) return null;
-                    throw new WorkflowExpressionException(expr, $"Unknown variable '{root}'");
+                    return isCondition ? null : throw new WorkflowExpressionException(expr, $"Unknown variable '{root}'");
                 }
-                var output = ctx.GetOutput(root);
-                if (segments.Length == 1) return output;
+                object? output = ctx.GetOutput(root);
+                if (segments.Length == 1)
+                {
+                    return output;
+                }
+
                 if (output is JsonElement je)
+                {
                     return TraverseJsonElement(je, segments, 1, expr, isCondition);
+                }
+
                 return null;
         }
     }
 
-    private static object? TraverseJsonElement(
+    static object? TraverseJsonElement(
         JsonElement element, string[] segments, int startIndex, string expr, bool isCondition)
     {
-        for (var i = startIndex; i < segments.Length; i++)
+        for (int i = startIndex; i < segments.Length; i++)
         {
             if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
                 return null;
+            }
+
             if (element.ValueKind != JsonValueKind.Object)
             {
-                if (isCondition) return null;
-                throw new WorkflowExpressionException(
+                return isCondition
+                    ? null
+                    : throw new WorkflowExpressionException(
                     expr, $"Cannot access property '{segments[i]}' on a non-object");
             }
             if (!TryGetProperty(element, segments[i], out var child))
             {
-                if (isCondition) return null;
-                var path = string.Join(".", segments[..i]);
+                if (isCondition)
+                {
+                    return null;
+                }
+
+                string path = string.Join(".", segments[..i]);
                 throw new WorkflowExpressionException(
                     expr, $"Property '{segments[i]}' not found on '{path}'");
             }
@@ -162,10 +185,13 @@ internal static class ExpressionEvaluator
         return UnboxJsonElement(element);
     }
 
-    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
     {
         if (element.TryGetProperty(name, out value))
+        {
             return true;
+        }
+
         foreach (var prop in element.EnumerateObject())
         {
             if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
@@ -178,10 +204,10 @@ internal static class ExpressionEvaluator
         return false;
     }
 
-    private static object? UnboxJsonElement(JsonElement el) => el.ValueKind switch
+    static object? UnboxJsonElement(JsonElement el) => el.ValueKind switch
     {
         JsonValueKind.String  => el.GetString(),
-        JsonValueKind.Number  => el.TryGetInt64(out var l) ? (object)l : el.GetDouble(),
+        JsonValueKind.Number  => el.TryGetInt64(out long l) ? (object)l : el.GetDouble(),
         JsonValueKind.True    => true,
         JsonValueKind.False   => false,
         JsonValueKind.Null    => null,
@@ -189,30 +215,32 @@ internal static class ExpressionEvaluator
         _                     => el   // Object or Array — preserve as JsonElement
     };
 
-    private static object? EvalUnary(UnaryOpNode node, WorkflowExecutionContext ctx, string expr)
+    static object? EvalUnary(UnaryOpNode node, WorkflowExecutionContext ctx, string expr)
     {
-        var operand = EvalNode(node.Operand, ctx, expr, isCondition: true);
+        object? operand = EvalNode(node.Operand, ctx, expr, isCondition: true);
         return node.Op == ExprTokenKind.Not ? !IsTruthy(operand)
             : throw new WorkflowExpressionException(expr, $"Unknown unary op {node.Op}");
     }
 
-    private static object? EvalBinary(BinaryOpNode node, WorkflowExecutionContext ctx, string expr)
+#pragma warning disable CA1859 // Use concrete types when possible for improved performance
+    static object? EvalBinary(BinaryOpNode node, WorkflowExecutionContext ctx, string expr)
+#pragma warning restore CA1859 // Use concrete types when possible for improved performance
     {
         // Short-circuit &&
         if (node.Op == ExprTokenKind.And)
         {
-            var l = EvalNode(node.Left, ctx, expr, isCondition: true);
-            return !IsTruthy(l) ? false : IsTruthy(EvalNode(node.Right, ctx, expr, isCondition: true));
+            object? l = EvalNode(node.Left, ctx, expr, isCondition: true);
+            return IsTruthy(l) && IsTruthy(EvalNode(node.Right, ctx, expr, isCondition: true));
         }
         // Short-circuit ||
         if (node.Op == ExprTokenKind.Or)
         {
-            var l = EvalNode(node.Left, ctx, expr, isCondition: true);
-            return IsTruthy(l) ? true : IsTruthy(EvalNode(node.Right, ctx, expr, isCondition: true));
+            object? l = EvalNode(node.Left, ctx, expr, isCondition: true);
+            return IsTruthy(l) || IsTruthy(EvalNode(node.Right, ctx, expr, isCondition: true));
         }
 
-        var left = EvalNode(node.Left, ctx, expr, isCondition: true);
-        var right = EvalNode(node.Right, ctx, expr, isCondition: true);
+        object? left = EvalNode(node.Left, ctx, expr, isCondition: true);
+        object? right = EvalNode(node.Right, ctx, expr, isCondition: true);
 
         return node.Op switch
         {
@@ -226,23 +254,13 @@ internal static class ExpressionEvaluator
         };
     }
 
-    private static bool AreEqual(object? a, object? b)
-    {
-        if (a == null && b == null) return true;
-        if (a == null || b == null) return false;
-        if (TryGetDouble(a, out var da) && TryGetDouble(b, out var db))
-            return da == db;
-        return a.ToString() == b.ToString();
-    }
+    static bool AreEqual(object? a, object? b) => (a == null && b == null) || (a != null && b != null && (TryGetDouble(a, out double da) && TryGetDouble(b, out double db) ? da == db : a.ToString() == b.ToString()));
 
-    private static int Compare(object? a, object? b)
-    {
-        if (TryGetDouble(a, out var da) && TryGetDouble(b, out var db))
-            return da.CompareTo(db);
-        return string.Compare(a?.ToString(), b?.ToString(), StringComparison.Ordinal);
-    }
+    static int Compare(object? a, object? b) => TryGetDouble(a, out double da) && TryGetDouble(b, out double db)
+            ? da.CompareTo(db)
+            : string.Compare(a?.ToString(), b?.ToString(), StringComparison.Ordinal);
 
-    private static bool TryGetDouble(object? value, out double result)
+    static bool TryGetDouble(object? value, out double result)
     {
         switch (value)
         {
@@ -256,7 +274,7 @@ internal static class ExpressionEvaluator
         }
     }
 
-    private static bool IsTruthy(object? value) => value switch
+    static bool IsTruthy(object? value) => value switch
     {
         null       => false,
         bool b     => b,
@@ -286,11 +304,17 @@ internal static class ExpressionEvaluator
         JsonElement je => je.ToString(),
         _ => value.ToString() ?? ""
     };
+
+    [GeneratedRegex(@"^\s*\{\{(.+?)\}\}\s*$", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex SingleExprRegex();
+
+    [GeneratedRegex(@"\{\{(.+?)\}\}", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex AllTokensRegex();
 }
 
 // ---- Token types ----
 
-internal enum ExprTokenKind
+enum ExprTokenKind
 {
     Ident, StringLit, NumberLit, True, False, Null,
     Dot, LParen, RParen,
@@ -299,7 +323,7 @@ internal enum ExprTokenKind
     EOF
 }
 
-internal sealed class ExprToken(ExprTokenKind kind, string? text = null, object? value = null)
+sealed class ExprToken(ExprTokenKind kind, string? text = null, object? value = null)
 {
     public ExprTokenKind Kind { get; } = kind;
     public string? Text { get; } = text;
@@ -308,20 +332,29 @@ internal sealed class ExprToken(ExprTokenKind kind, string? text = null, object?
 
 // ---- Lexer ----
 
-internal sealed class ExprLexer(string text)
+sealed class ExprLexer(string text)
 {
-    private int _pos;
+#pragma warning disable IDE1006 // Naming Styles
+    int _pos;
+#pragma warning restore IDE1006 // Naming Styles
 
     public ExprToken Next()
     {
-        while (_pos < text.Length && char.IsWhiteSpace(text[_pos])) _pos++;
-        if (_pos >= text.Length) return new ExprToken(ExprTokenKind.EOF);
-
-        var c = text[_pos];
-
-        if (c == '"' || c == '\'')
+        while (_pos < text.Length && char.IsWhiteSpace(text[_pos]))
         {
-            var quote = c;
+            _pos++;
+        }
+
+        if (_pos >= text.Length)
+        {
+            return new ExprToken(ExprTokenKind.EOF);
+        }
+
+        char c = text[_pos];
+
+        if (c is '"' or '\'')
+        {
+            char quote = c;
             _pos++;
             var sb = new System.Text.StringBuilder();
             while (_pos < text.Length && text[_pos] != quote)
@@ -329,34 +362,59 @@ internal sealed class ExprLexer(string text)
                 if (text[_pos] == '\\' && _pos + 1 < text.Length)
                 {
                     _pos++;
-                    sb.Append(text[_pos] switch { 'n' => '\n', 't' => '\t', _ => text[_pos] });
+                    _ = sb.Append(text[_pos] switch { 'n' => '\n', 't' => '\t', _ => text[_pos] });
                 }
-                else sb.Append(text[_pos]);
+                else
+                {
+                    _ = sb.Append(text[_pos]);
+                }
+
                 _pos++;
             }
-            if (_pos < text.Length) _pos++;
+            if (_pos < text.Length)
+            {
+                _pos++;
+            }
+
             return new ExprToken(ExprTokenKind.StringLit, null, sb.ToString());
         }
 
         if (char.IsDigit(c) || (c == '-' && _pos + 1 < text.Length && char.IsDigit(text[_pos + 1])))
         {
-            var start = _pos;
-            if (c == '-') _pos++;
-            while (_pos < text.Length && char.IsDigit(text[_pos])) _pos++;
-            var isFloat = _pos < text.Length && text[_pos] == '.';
-            if (isFloat) { _pos++; while (_pos < text.Length && char.IsDigit(text[_pos])) _pos++; }
-            var num = text[start.._pos];
+            int start = _pos;
+            if (c == '-')
+            {
+                _pos++;
+            }
+
+            while (_pos < text.Length && char.IsDigit(text[_pos]))
+            {
+                _pos++;
+            }
+
+            bool isFloat = _pos < text.Length && text[_pos] == '.';
+            if (isFloat) { _pos++; while (_pos < text.Length && char.IsDigit(text[_pos]))
+                {
+                    _pos++;
+                }
+            }
+            string num = text[start.._pos];
+#pragma warning disable CA1305 // Specify IFormatProvider
             return isFloat
                 ? new ExprToken(ExprTokenKind.NumberLit, null, double.Parse(num, System.Globalization.CultureInfo.InvariantCulture))
                 : new ExprToken(ExprTokenKind.NumberLit, null, long.Parse(num));
+#pragma warning restore CA1305 // Specify IFormatProvider
         }
 
         if (char.IsLetter(c) || c is '_' or '$')
         {
-            var start = _pos;
+            int start = _pos;
             while (_pos < text.Length && (char.IsLetterOrDigit(text[_pos]) || text[_pos] is '_' or '$'))
+            {
                 _pos++;
-            var ident = text[start.._pos];
+            }
+
+            string ident = text[start.._pos];
             return ident switch
             {
                 "true"  => new ExprToken(ExprTokenKind.True, ident, true),
@@ -389,15 +447,15 @@ internal sealed class ExprLexer(string text)
 
 // ---- AST Nodes ----
 
-internal abstract class ExprNode { }
-internal sealed class LiteralNode(object? value) : ExprNode { public readonly object? Value = value; }
-internal sealed class PathNode(string[] segments) : ExprNode { public readonly string[] Segments = segments; }
-internal sealed class UnaryOpNode(ExprTokenKind op, ExprNode operand) : ExprNode
+abstract class ExprNode { }
+sealed class LiteralNode(object? value) : ExprNode { public readonly object? Value = value; }
+sealed class PathNode(string[] segments) : ExprNode { public readonly string[] Segments = segments; }
+sealed class UnaryOpNode(ExprTokenKind op, ExprNode operand) : ExprNode
 {
     public readonly ExprTokenKind Op = op;
     public readonly ExprNode Operand = operand;
 }
-internal sealed class BinaryOpNode(ExprTokenKind op, ExprNode left, ExprNode right) : ExprNode
+sealed class BinaryOpNode(ExprTokenKind op, ExprNode left, ExprNode right) : ExprNode
 {
     public readonly ExprTokenKind Op = op;
     public readonly ExprNode Left = left;
@@ -406,31 +464,29 @@ internal sealed class BinaryOpNode(ExprTokenKind op, ExprNode left, ExprNode rig
 
 // ---- Recursive descent parser ----
 
-internal sealed class ExprParser
+sealed class ExprParser
 {
-    private readonly string _expression;
-    private readonly ExprLexer _lexer;
-    private ExprToken _cur;
+    readonly string expression;
+    readonly ExprLexer lexer;
+    ExprToken cur;
 
     public ExprParser(ExprLexer lexer, string expression)
     {
-        _lexer = lexer;
-        _expression = expression;
-        _cur = _lexer.Next();
+        this.lexer = lexer;
+        this.expression = expression;
+        cur = this.lexer.Next();
     }
 
     public ExprNode Parse()
     {
         var node = ParseOr();
-        if (_cur.Kind != ExprTokenKind.EOF)
-            throw new WorkflowExpressionException(_expression, $"Unexpected token '{_cur.Text}'");
-        return node;
+        return cur.Kind != ExprTokenKind.EOF ? throw new WorkflowExpressionException(expression, $"Unexpected token '{cur.Text}'") : node;
     }
 
-    private ExprNode ParseOr()
+    ExprNode ParseOr()
     {
         var left = ParseAnd();
-        while (_cur.Kind == ExprTokenKind.Or)
+        while (cur.Kind == ExprTokenKind.Or)
         {
             Advance();
             left = new BinaryOpNode(ExprTokenKind.Or, left, ParseAnd());
@@ -438,10 +494,10 @@ internal sealed class ExprParser
         return left;
     }
 
-    private ExprNode ParseAnd()
+    ExprNode ParseAnd()
     {
         var left = ParseEquality();
-        while (_cur.Kind == ExprTokenKind.And)
+        while (cur.Kind == ExprTokenKind.And)
         {
             Advance();
             left = new BinaryOpNode(ExprTokenKind.And, left, ParseEquality());
@@ -449,31 +505,31 @@ internal sealed class ExprParser
         return left;
     }
 
-    private ExprNode ParseEquality()
+    ExprNode ParseEquality()
     {
         var left = ParseComparison();
-        if (_cur.Kind is ExprTokenKind.Eq or ExprTokenKind.Neq)
+        if (cur.Kind is ExprTokenKind.Eq or ExprTokenKind.Neq)
         {
-            var op = _cur.Kind; Advance();
+            var op = cur.Kind; Advance();
             return new BinaryOpNode(op, left, ParseComparison());
         }
         return left;
     }
 
-    private ExprNode ParseComparison()
+    ExprNode ParseComparison()
     {
         var left = ParseUnary();
-        if (_cur.Kind is ExprTokenKind.Lt or ExprTokenKind.Gt or ExprTokenKind.Lte or ExprTokenKind.Gte)
+        if (cur.Kind is ExprTokenKind.Lt or ExprTokenKind.Gt or ExprTokenKind.Lte or ExprTokenKind.Gte)
         {
-            var op = _cur.Kind; Advance();
+            var op = cur.Kind; Advance();
             return new BinaryOpNode(op, left, ParseUnary());
         }
         return left;
     }
 
-    private ExprNode ParseUnary()
+    ExprNode ParseUnary()
     {
-        if (_cur.Kind == ExprTokenKind.Not)
+        if (cur.Kind == ExprTokenKind.Not)
         {
             Advance();
             return new UnaryOpNode(ExprTokenKind.Not, ParseUnary());
@@ -481,47 +537,55 @@ internal sealed class ExprParser
         return ParsePrimary();
     }
 
-    private ExprNode ParsePrimary()
+    ExprNode ParsePrimary()
     {
-        if (_cur.Kind == ExprTokenKind.LParen)
+        if (cur.Kind == ExprTokenKind.LParen)
         {
             Advance();
             var inner = ParseOr();
-            if (_cur.Kind != ExprTokenKind.RParen)
-                throw new WorkflowExpressionException(_expression, "Expected ')'");
+            if (cur.Kind != ExprTokenKind.RParen)
+            {
+                throw new WorkflowExpressionException(expression, "Expected ')'");
+            }
+
             Advance();
             return inner;
         }
 
-        if (_cur.Kind == ExprTokenKind.Ident)
+        if (cur.Kind == ExprTokenKind.Ident)
         {
-            var name = _cur.Text!; Advance();
+            string name = cur.Text!; Advance();
             return ParsePathContinuation(name);
         }
 
-        if (_cur.Kind is ExprTokenKind.True or ExprTokenKind.False or ExprTokenKind.Null
+        if (cur.Kind is ExprTokenKind.True or ExprTokenKind.False or ExprTokenKind.Null
                       or ExprTokenKind.StringLit or ExprTokenKind.NumberLit)
         {
-            var val = _cur.Value; Advance();
+            object? val = cur.Value; Advance();
             return new LiteralNode(val);
         }
 
-        throw new WorkflowExpressionException(_expression,
-            $"Unexpected token '{_cur.Text ?? _cur.Kind.ToString()}'");
+        throw new WorkflowExpressionException(expression,
+            $"Unexpected token '{cur.Text ?? cur.Kind.ToString()}'");
     }
 
-    private ExprNode ParsePathContinuation(string first)
+#pragma warning disable CA1859 // Use concrete types when possible for improved performance
+    ExprNode ParsePathContinuation(string first)
+#pragma warning restore CA1859 // Use concrete types when possible for improved performance
     {
         var segments = new List<string> { first };
-        while (_cur.Kind == ExprTokenKind.Dot)
+        while (cur.Kind == ExprTokenKind.Dot)
         {
             Advance();
-            if (_cur.Kind != ExprTokenKind.Ident)
-                throw new WorkflowExpressionException(_expression, "Expected identifier after '.'");
-            segments.Add(_cur.Text!); Advance();
+            if (cur.Kind != ExprTokenKind.Ident)
+            {
+                throw new WorkflowExpressionException(expression, "Expected identifier after '.'");
+            }
+
+            segments.Add(cur.Text!); Advance();
         }
-        return new PathNode(segments.ToArray());
+        return new PathNode([.. segments]);
     }
 
-    private void Advance() => _cur = _lexer.Next();
+    void Advance() => cur = lexer.Next();
 }

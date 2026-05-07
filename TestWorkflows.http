@@ -1,4 +1,8 @@
 @host = http://localhost:7071
+@instanceId = 34fff3b40d114817ba148f3778c91dc8
+
+### Check status
+GET {{host}}/runtime/webhooks/durabletask/instances/{{instanceId}}
 
 ### Simple: Start workflow
 POST {{host}}/api/workflows/Simple
@@ -19,9 +23,6 @@ Content-Type: application/json
     { "lineItemId": "li-1", "productId": "prod-1", "quantity": 2 }
   ]
 }
-
-###
-@instanceId = 3a55076c5a044bac99621678957b3b21
 
 ### Generic: Approve
 POST {{host}}/api/events/{{instanceId}}/ApprovalDecision
@@ -58,11 +59,6 @@ Content-Type: application/json
   ]
 }
 
-###
-@instanceId = 0c622f5d4ddc4a3aa6d6a558d4d9e2b9
-
-### Check status
-GET {{host}}/runtime/webhooks/durabletask/instances/{{instanceId}}
 
 ### Generic: OrderProcessed
 POST {{host}}/api/events/{{instanceId}}/OrderProcessed
@@ -82,9 +78,3 @@ Content-Type: application/json
   "siteUrl": "https://build.microsoft.com/en-US/sessions?search=hanselman&sortBy=relevance",
   "prompt": "Extract the full schedule for Scott Hanselman ('Hanselman') from this page, and only return success if it shows that he is presenting at least one session."
 }
-
-###
-@instanceId = 196cea6cc89f4a19b3ab940e3699560d
-
-### Check status
-GET {{host}}/runtime/webhooks/durabletask/instances/{{instanceId}}

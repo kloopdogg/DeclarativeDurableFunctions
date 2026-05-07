@@ -1,6 +1,6 @@
 namespace DeclarativeDurableFunctions.Models;
 
-internal sealed class StepDefinition
+sealed class StepDefinition
 {
     public string? Name { get; init; }
     public StepType Type { get; init; }
