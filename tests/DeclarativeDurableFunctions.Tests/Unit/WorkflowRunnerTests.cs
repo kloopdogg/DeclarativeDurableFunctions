@@ -944,4 +944,100 @@ public class WorkflowRunnerTests
         var agg = (JsonElement)execCtx.GetOutput("blockResult")!;
         Assert.Equal(JsonValueKind.Null, agg.GetProperty("SendBranch").ValueKind);
     }
+
+    // ---- Loop ----
+
+    [Fact]
+    public async Task Loop_CallsSubOrchestratorAsync_WithLoopFunctionName()
+    {
+        var (context, execCtx) = MakeContext(instanceId: "parent-instance");
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("""{"status":"success"}""")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "RetryUntilDone",
+            Type = StepType.Loop,
+            LoopWorkflowName = "__loop__TestWorkflow__RetryUntilDone",
+            Output = "result",
+            BreakWhen = "{{result.status == 'success'}}",
+            Delay = "PT1H",
+            Timeout = "P30D",
+            OnTimeout = "continue"
+        }), execCtx);
+
+        await context.Received(1).CallSubOrchestratorAsync<JsonElement>(
+            Arg.Is<TaskName>(n => n.Name == "DeclarativeWorkflowLoop"),
+            Arg.Any<object?>(), Arg.Any<TaskOptions?>());
+    }
+
+    [Fact]
+    public async Task Loop_InstanceId_HasCorrectFormat()
+    {
+        var (context, execCtx) = MakeContext(instanceId: "parent-instance");
+        SubOrchestrationOptions? capturedOpts = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedOpts = callInfo[2] as SubOrchestrationOptions;
+                return Task.FromResult(Json("""{"status":"success"}"""));
+            });
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "RetryUntilDone",
+            Type = StepType.Loop,
+            LoopWorkflowName = "__loop__TestWorkflow__RetryUntilDone",
+            Output = "result",
+            BreakWhen = "{{result.status == 'success'}}",
+            Delay = "PT1H"
+        }), execCtx);
+
+        Assert.NotNull(capturedOpts);
+        Assert.Equal("parent-instance:RetryUntilDone:loop", capturedOpts.InstanceId);
+    }
+
+    [Fact]
+    public async Task Loop_StoresResult_UnderOutputName()
+    {
+        var (context, execCtx) = MakeContext();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("""{"status":"success","data":"found"}""")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "RetryUntilDone",
+            Type = StepType.Loop,
+            LoopWorkflowName = "__loop__TestWorkflow__RetryUntilDone",
+            Output = "result",
+            BreakWhen = "{{result.done}}",
+            Delay = "PT1H"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("result"));
+        var stored = (JsonElement)execCtx.GetOutput("result")!;
+        Assert.Equal("found", stored.GetProperty("data").GetString());
+    }
+
+    [Fact]
+    public async Task Loop_NullResult_StoresNull()
+    {
+        var (context, execCtx) = MakeContext();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(Task.FromResult(Json("null")));
+
+        await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
+        {
+            Name = "RetryUntilDone",
+            Type = StepType.Loop,
+            LoopWorkflowName = "__loop__TestWorkflow__RetryUntilDone",
+            Output = "result",
+            BreakWhen = "{{result.done}}",
+            Delay = "PT1H",
+            OnTimeout = "continue"
+        }), execCtx);
+
+        Assert.True(execCtx.HasOutput("result"));
+        Assert.Null(execCtx.GetOutput("result"));
+    }
 }

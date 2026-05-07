@@ -46,6 +46,7 @@ internal static class WorkflowRunner
             case StepType.Switch:           await RunSwitch(context, step, execCtx); break;
             case StepType.Poll:             await RunPoll(context, step, execCtx, outputNameOverride); break;
             case StepType.TriggerAndWait:   await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
+            case StepType.Loop:             await RunLoop(context, step, execCtx, outputNameOverride); break;
         }
     }
 
@@ -266,16 +267,7 @@ internal static class WorkflowRunner
         var activityTask = context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput);
 
         var winner = await Task.WhenAny(eventTask, timerTask);
-
-        // If the activity failed, re-throw immediately rather than hanging until the
-        // event or timeout fires.
-        if (activityTask.IsFaulted)
-            await activityTask;
-
-        // Activity completed successfully before the event arrived (expected: fast send).
-        // Continue waiting for the event or timeout.
-        if (winner == activityTask)
-            winner = await Task.WhenAny(eventTask, timerTask);
+        await Task.WhenAll(winner, activityTask);
 
         if (winner == eventTask)
         {
@@ -346,6 +338,40 @@ internal static class WorkflowRunner
 
         if (caseSteps != null)
             await ExecuteSteps(context, caseSteps, execCtx);
+    }
+
+    // ---- Loop ----
+
+    private static async Task RunLoop(
+        TaskOrchestrationContext context,
+        StepDefinition step,
+        WorkflowExecutionContext execCtx,
+        string? outputNameOverride = null)
+    {
+        var loopInput = new LoopInput
+        {
+            InnerWorkflowName  = step.LoopWorkflowName!,
+            OutputName         = step.Output!,
+            BreakWhenExpression = step.BreakWhen!,
+            Delay              = step.Delay!,
+            MaxDuration        = step.Timeout,
+            OnTimeout          = step.OnTimeout,
+            StartedAt          = context.CurrentUtcDateTime,
+            PreviousOutputs    = [],
+            ParentInput        = execCtx.Input
+        };
+
+        var instanceId = $"{context.InstanceId}:{step.Name}:loop";
+        var options = new SubOrchestrationOptions(retry: null, instanceId: instanceId);
+        var result = await context.CallSubOrchestratorAsync<JsonElement>(
+            DeclarativeLoopOrchestrator.FunctionName, loopInput, options);
+
+        var effectiveOutput = outputNameOverride ?? step.Output;
+        if (effectiveOutput != null)
+        {
+            object? outputValue = result.ValueKind == JsonValueKind.Null ? null : result;
+            execCtx.SetOutput(effectiveOutput, outputValue);
+        }
     }
 
 }

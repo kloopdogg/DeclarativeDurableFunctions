@@ -132,6 +132,8 @@ src/
       WorkflowRunner.cs
       PollerInput.cs
       DeclarativePollerOrchestrator.cs
+      LoopInput.cs
+      DeclarativeLoopOrchestrator.cs
     Extensions/
       ServiceCollectionExtensions.cs
       OrchestrationContextExtensions.cs
@@ -367,7 +369,7 @@ workflow:
 2. If `workflow` field is present and `type` is omitted → `type: sub-orchestration`.
 3. If `workflow` field is present and `type: foreach` → foreach over sub-orchestration.
 4. If `activity` field is present and `type: foreach` → foreach over activity.
-5. `type` must be one of: `activity`, `sub-orchestration`, `foreach`, `parallel`, `wait-for-event`, `switch`, `poll`, `trigger-and-wait`. Any other value is a `WorkflowDefinitionException`.
+5. `type` must be one of: `activity`, `sub-orchestration`, `foreach`, `parallel`, `wait-for-event`, `switch`, `poll`, `trigger-and-wait`, `loop`. Any other value is a `WorkflowDefinitionException`.
 
 ### 5.4 Activity Step
 
@@ -486,6 +488,7 @@ A parallel block is a **fan-out/fan-in** construct. All branches launch concurre
 | `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
 | `trigger-and-wait` | Event payload; `null` if `on-timeout: continue` fires |
 | `poll` | Last activity result satisfying `until`; `null` if `on-timeout: continue` fires |
+| `loop` | Value of the loop's `output` variable on break; `null` if `on-timeout: continue` fires |
 | `switch` | `null` — switch routes execution and has no return value |
 | `parallel` (nested) | The nested block's aggregate object |
 | Any step with `condition: false` | `null` — the step was skipped |
@@ -618,7 +621,52 @@ Boolean expressions always produce the lowercase strings `"true"` or `"false"` �
 7. If the timer wins: `on-timeout: fail` throws `WorkflowTimeoutException`; `on-timeout: continue` stores `null`
 8. If no `timeout`: the activity is awaited, then the event is awaited indefinitely
 
-### 5.12 Complete Example: `OrderFulfillment.yaml`
+### 5.12 Loop Step
+
+```yaml
+- name: WaitForSignal
+  type: loop
+  max-duration: P30D        # required; ISO 8601 overall wall-clock timeout
+  delay: PT1H               # required; ISO 8601 sleep between iterations
+  break-when: "{{signalResult.status == 'success'}}"  # required; boolean expression
+  on-timeout: continue      # optional; fail (default) | continue
+  output: signalResult      # required; names a variable produced by an inner step
+  condition: "{{...}}"      # optional
+  steps:                    # required; sequence of steps (any type)
+    - name: AttemptSignal
+      type: trigger-and-wait
+      activity: SendSignalActivity
+      input:
+        correlationId: "{{orchestration.instanceId}}"
+      event: SignalReceived
+      timeout: PT5M
+      on-timeout: continue
+      output: signalResult
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `steps` | sequence | Yes | One or more steps of any type; executed sequentially each iteration |
+| `break-when` | expression | Yes | Boolean expression evaluated after each iteration against the inner execution context; exits the loop when true |
+| `output` | string | Yes | Names a variable that must be produced by one of the inner steps; its last known value is returned on break or timeout-continue |
+| `delay` | duration | Yes | ISO 8601 sleep between iterations (e.g. `PT1H`, `PT30M`) |
+| `max-duration` | duration | Yes | ISO 8601 wall-clock bound on the entire loop |
+| `on-timeout` | string | No | `fail` (default) — throw `WorkflowTimeoutException`; `continue` — store `null` and proceed |
+| `condition` | expression | No | If false, the loop is skipped entirely and no sub-orchestration is started |
+
+**Semantics:**
+
+- The inner steps run sequentially each iteration in their own `WorkflowExecutionContext` (seeded with the outputs carried forward from the previous iteration, so `break-when` can reference any inner step output by name).
+- After all inner steps complete, `break-when` is evaluated. If true, the loop exits and the value stored under `output` in the inner context is returned to the parent.
+- If `break-when` is false and `max-duration` has not elapsed, the engine sleeps `delay` then calls `ContinueAsNew`, resetting history to keep it bounded.
+- `output` is required (unlike `poll`) because `break-when` must reference at least one inner step result — and the loop needs to know what to return to the parent on exit.
+- Unlike `poll`'s `until` expression (which runs inside the poller with access only to the step's own activity result), `break-when` has access to all inner step outputs from the current iteration — useful when the loop body has multiple steps and the exit condition combines their results.
+
+**Scope constraint on `break-when`:** Evaluated inside `DeclarativeWorkflowLoop`. Has access to the inner step outputs carried in `LoopInput` (updated after each iteration) and `orchestration.instanceId` / `orchestration.parentInstanceId`. Does not have access to the parent workflow's step outputs.
+
+**Implementation:** `type: loop` dispatches to a built-in sub-orchestration named `DeclarativeWorkflowLoop` that ships inside the library assembly. The parent orchestration serializes the loop's step definitions to JSON and passes them along with `BreakWhen`, `Delay`, `MaxDuration`, `OnTimeout`, `OutputName`, `StartedAt`, and the last iteration's outputs (as a `Dictionary<string, JsonElement>`) in a `LoopInput` envelope. `ContinueAsNew` preserves the original `StartedAt` so the wall-clock timeout is correctly enforced across restarts.
+
+### 5.13 Complete Example: `OrderFulfillment.yaml`
 
 ```yaml
 workflow:
@@ -667,7 +715,7 @@ workflow:
           input: "{{fulfillmentResults}}"
 ```
 
-### 5.13 Complete Example: `FulfillLineItem.yaml`
+### 5.14 Complete Example: `FulfillLineItem.yaml`
 
 ```yaml
 workflow:
@@ -827,6 +875,7 @@ internal enum StepType
     Switch,
     Poll,
     TriggerAndWait,
+    Loop,
 }
 
 // Models/AppRetryPolicy.cs
@@ -871,7 +920,11 @@ internal sealed class StepDefinition
 
     // Poll
     public string? Until { get; init; }    // required for Poll; boolean expression
-    public string? Delay { get; init; }    // required for Poll; ISO 8601 duration
+    public string? Delay { get; init; }    // required for Poll and Loop; ISO 8601 duration
+
+    // Loop
+    public string? BreakWhen { get; init; }  // required for Loop; boolean expression
+    // MaxDuration reuses Timeout field (ISO 8601); Steps reuses the Steps field from Parallel
 }
 
 // Models/WorkflowDefinition.cs
@@ -905,6 +958,8 @@ internal sealed class WorkflowExecutionContext
     // Creates an isolated snapshot scope for a parallel branch; branches cannot observe each other's writes
     public WorkflowExecutionContext CreateParallelBranchScope();
 }
+
+// Engine/LoopInput.cs — see §8.12 for full type definition and DeclarativeLoopOrchestrator logic
 
 // Engine/WorkflowDefinitionRegistry.cs (implements IWorkflowDefinitionRegistry)
 internal sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
@@ -980,6 +1035,7 @@ For each step in definition.Steps:
        WaitForEvent      → RunWaitForEvent(context, step, execCtx)
        Switch            → RunSwitch(context, step, execCtx)
        TriggerAndWait       → RunTriggerAndWait(context, step, execCtx)
+       Loop                 → RunLoop(context, step, execCtx)
 ```
 
 ### 8.4 Activity Dispatch
@@ -1242,7 +1298,104 @@ context.ContinueAsNew(input)
 // No return needed; ContinueAsNew schedules the restart and the current execution ends
 ```
 
-### 8.12 YAML Parsing (`WorkflowDefinitionLoader`)
+### 8.12 Loop Dispatch
+
+The loop step dispatches to the built-in `DeclarativeWorkflowLoop` sub-orchestration. The parent orchestration serializes the loop's step definitions to JSON and passes a `LoopInput` envelope. The loop orchestrator runs the inner steps on each iteration using its own `WorkflowExecutionContext`, evaluates `break-when`, and either returns or calls `ContinueAsNew`.
+
+**In `WorkflowRunner` (parent orchestration):**
+
+```
+stepsJson = JsonSerializer.Serialize(step.Steps)   // serialize IReadOnlyList<StepDefinition>
+
+loopInput = new LoopInput
+{
+    StepsJson        = stepsJson,
+    BreakWhen        = step.BreakWhen,
+    OutputName       = step.Output,
+    Delay            = step.Delay,
+    MaxDuration      = step.Timeout,      // max-duration maps to Timeout field
+    OnTimeout        = step.OnTimeout,    // "fail" | "continue"
+    StartedAt        = context.CurrentUtcDateTime,
+    PreviousOutputs  = new Dictionary<string, JsonElement>()  // empty on first call
+}
+
+instanceId = $"{context.InstanceId}:{step.Name ?? "loop"}:loop"
+options = new SubOrchestrationOptions(null, instanceId)
+result = await context.CallSubOrchestratorAsync<JsonElement?>("DeclarativeWorkflowLoop", loopInput, options)
+
+effectiveOutput = outputNameOverride ?? step.Output
+if effectiveOutput != null: execCtx.SetOutput(effectiveOutput, result)
+```
+
+**`LoopInput` internal type** (add to `Engine/LoopInput.cs`):
+
+```csharp
+internal sealed class LoopInput
+{
+    public string StepsJson { get; init; } = string.Empty;     // JSON-serialized StepDefinition[]
+    public string BreakWhen { get; init; } = string.Empty;     // boolean expression
+    public string OutputName { get; init; } = string.Empty;    // variable name for break-when and return value
+    public string Delay { get; init; } = string.Empty;         // ISO 8601
+    public string? MaxDuration { get; init; }                  // ISO 8601; null = no timeout
+    public string OnTimeout { get; init; } = "fail";
+    public DateTimeOffset StartedAt { get; init; }             // fixed at first iteration; preserved across ContinueAsNew
+    public Dictionary<string, JsonElement> PreviousOutputs { get; init; } = [];  // inner step outputs from last iteration
+}
+```
+
+**`StepDefinition` serialization:** `StepDefinition` must be JSON-serializable (add `[JsonInclude]` or ensure all `init` properties serialize correctly via `System.Text.Json`). The nested `Steps` (for `parallel` and `loop`) and `Cases` (for `switch`) must round-trip correctly.
+
+**`DeclarativeWorkflowLoop` orchestration** (add to `Engine/DeclarativeLoopOrchestrator.cs`):
+
+```
+input = context.GetInput<LoopInput>()
+
+// Deserialize step definitions
+steps = WorkflowDefinitionLoader.DeserializeSteps(input.StepsJson)
+
+// Seed the inner context with outputs carried from the previous iteration
+innerCtx = new WorkflowExecutionContext(default(JsonElement), context)
+foreach (name, value) in input.PreviousOutputs:
+    innerCtx.SetOutput(name, value)
+
+// Run all inner steps for this iteration
+await WorkflowRunner.RunAsync(context, new WorkflowDefinition { Steps = steps }, innerCtx)
+
+// Evaluate the break condition against the inner context
+conditionMet = ExpressionEvaluator.EvaluateBool(input.BreakWhen, innerCtx)
+
+if conditionMet:
+    // Return the named output to the parent; null if the step never ran (e.g. condition:false)
+    return innerCtx.HasOutput(input.OutputName) ? innerCtx.GetOutput(input.OutputName) : null
+
+// Check wall-clock timeout before sleeping
+if input.MaxDuration != null:
+    elapsed = context.CurrentUtcDateTime - input.StartedAt
+    if elapsed >= ParseIso8601Duration(input.MaxDuration):
+        if input.OnTimeout == "fail":
+            throw new WorkflowTimeoutException("loop", input.MaxDuration)
+        else:  // "continue"
+            return null
+
+// Carry all inner outputs forward for the next iteration
+nextInput = input with
+{
+    PreviousOutputs = innerCtx.Outputs
+        .Where(kvp => kvp.Value is JsonElement)
+        .ToDictionary(kvp => kvp.Key, kvp => (JsonElement)kvp.Value)
+}
+
+// Sleep, then restart
+await context.CreateTimer(
+    context.CurrentUtcDateTime + ParseIso8601Duration(input.Delay),
+    CancellationToken.None)
+
+context.ContinueAsNew(nextInput)
+```
+
+**`WorkflowDefinitionLoader.DeserializeSteps`** — add as a new `internal static` method that accepts a JSON string and returns `IReadOnlyList<StepDefinition>`. This is the inverse of the JSON serialization done in the parent orchestration dispatch.
+
+### 8.13 YAML Parsing (`WorkflowDefinitionLoader`)
 
 Use **YamlDotNet** to deserialize YAML into an intermediate dictionary model, then map to `WorkflowDefinition`. Do not use YamlDotNet's direct deserialization to the model types (mapping manually gives better validation error messages).
 
@@ -1266,10 +1419,17 @@ Validation rules (throw `WorkflowDefinitionException` for any violation):
 17. `trigger-and-wait` step must have `activity`.
 18. `trigger-and-wait` step must have `event`.
 19. `trigger-and-wait` step `on-timeout` must be `fail` or `continue` if present.
+20. `loop` step must have `steps` as a non-empty sequence.
+21. `loop` step must have `break-when`.
+22. `loop` step must have `delay`.
+23. `loop` step must have `max-duration`.
+24. `loop` step must have `output` (required so `break-when` has a variable name to reference and so the parent context knows what to store).
+25. `loop` step `on-timeout` must be `fail` or `continue` if present.
+26. A child step inside a `loop` body must not itself be a `loop` step that references outputs not available in the loop's inner context. (Advisory — not a hard validation error, but document the scope constraint.)
 
 ISO 8601 duration parsing: use a helper that converts `PT5S` → `TimeSpan.FromSeconds(5)`, `P7D` → `TimeSpan.FromDays(7)`, etc. Standard .NET does not parse ISO 8601 durations natively; implement a minimal parser (only `P`, `D`, `H`, `M`, `S` components needed).
 
-### 8.13 Determinism Constraints
+### 8.14 Determinism Constraints
 
 The `WorkflowRunner` runs inside the orchestrator and is subject to Durable Functions replay rules:
 - No `DateTime.Now` or `DateTime.UtcNow` — use `context.CurrentUtcDateTime`.
@@ -1355,6 +1515,13 @@ Cover all expression forms in §6.2. Key cases:
 | TriggerAndWait — missing `activity` | `type: trigger-and-wait` without `activity` | `WorkflowDefinitionException` |
 | TriggerAndWait — missing `event` | `type: trigger-and-wait` without `event` | `WorkflowDefinitionException` |
 | TriggerAndWait — optional `timeout` absent | `type: trigger-and-wait` without `timeout` | parses; `Timeout` is null |
+| Loop — all required fields | `type: loop` with `steps`, `break-when`, `delay`, `max-duration`, `output` | parses correctly; `StepType.Loop` |
+| Loop — missing `break-when` | `type: loop` without `break-when` | `WorkflowDefinitionException` |
+| Loop — missing `delay` | `type: loop` without `delay` | `WorkflowDefinitionException` |
+| Loop — missing `max-duration` | `type: loop` without `max-duration` | `WorkflowDefinitionException` |
+| Loop — missing `output` | `type: loop` without `output` | `WorkflowDefinitionException` |
+| Loop — missing `steps` | `type: loop` without `steps` | `WorkflowDefinitionException` |
+| Loop — inner steps parsed recursively | loop body contains `trigger-and-wait` step | inner `StepDefinition` has `StepType.TriggerAndWait` |
 
 ### 9.3 WorkflowRunnerTests
 
@@ -1394,6 +1561,14 @@ Mock `TaskOrchestrationContext` with NSubstitute. Set up `context.Name` to retur
 | TriggerAndWait — no timeout | Activity awaited; event awaited indefinitely; result stored |
 | TriggerAndWait — condition=false skips | Neither `WaitForExternalEvent` nor `CallActivityAsync` is called |
 | TriggerAndWait — parallel branch null on timeout-continue | `null` appears in aggregate under branch step name |
+| Loop — break on first iteration | `break-when` true after first run; `CallSubOrchestratorAsync("DeclarativeWorkflowLoop", ...)` called; result stored under `output` |
+| Loop — `LoopInput` fields | `BreakWhen`, `OutputName`, `Delay`, `MaxDuration`, `OnTimeout`, `StartedAt`, `StepsJson` all correctly populated |
+| Loop — inner outputs carried forward | `PreviousOutputs` in `LoopInput` contains outputs from prior iteration so `break-when` can reference them |
+| Loop — instance ID format | Sub-orchestration instance ID is `{parentInstanceId}:{stepName}:loop` |
+| Loop — timeout fail | `WorkflowTimeoutException` thrown when `max-duration` elapsed |
+| Loop — timeout continue | `null` stored under `output`; execution proceeds |
+| Loop — condition=false skips | When step `condition` is false, `DeclarativeWorkflowLoop` is never called |
+| Loop — parallel branch null on timeout-continue | `null` appears in aggregate under branch step name |
 
 ---
 
@@ -1404,7 +1579,7 @@ Execute in this order. Each phase should compile and all tests should pass befor
 1. **Phase 1 — Scaffold**: `.slnx`, all three `.csproj` files, `Program.cs` in TestApp, empty class stubs (models only, no logic). `dotnet build` green.
 2. **Phase 2 — YAML Model + Loader**: `WorkflowDefinition`, `StepDefinition`, `WorkflowDefinitionLoader`. Write and pass `WorkflowDefinitionLoaderTests`. No engine logic yet.
 3. **Phase 3 — Expression Evaluator**: `ExpressionEvaluator` + `WorkflowExecutionContext`. Write and pass `ExpressionEvaluatorTests`.
-4. **Phase 4 — WorkflowRunner**: Full runner with all step types including `Poll` (dispatch to `DeclarativeWorkflowPoller`) and the `DeclarativePollerOrchestrator` class. Write and pass `WorkflowRunnerTests`.
+4. **Phase 4 — WorkflowRunner**: Full runner with all step types including `Poll` (dispatch to `DeclarativeWorkflowPoller`), `Loop` (dispatch to `DeclarativeWorkflowLoop`), and their respective orchestrator classes. Write and pass `WorkflowRunnerTests`.
 5. **Phase 5 — DI + Extension Methods**: `ServiceCollectionExtensions`, `OrchestrationContextExtensions`, `IWorkflowDefinitionRegistry`. Wire into `WorkflowRunner`.
 6. **Phase 6 — TestApp**: Activities, YAML files, `Program.cs` DI wiring. App should start locally without errors (`func start`).
 7. **Phase 7 — Polish**: Package metadata in `.csproj`, XML doc comments on all public API types, validate ISO duration edge cases.

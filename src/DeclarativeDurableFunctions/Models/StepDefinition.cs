@@ -27,4 +27,8 @@ internal sealed class StepDefinition
     // Poll
     public string? Until { get; init; }
     public string? Delay { get; init; }
+
+    // Loop
+    public string? BreakWhen { get; init; }
+    public string? LoopWorkflowName { get; init; }
 }

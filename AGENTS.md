@@ -45,6 +45,7 @@ The engine has four main parts. Keep them separated:
 | `TriggerAndWait` | register `WaitForExternalEvent` first, then `CallActivityAsync` concurrently, race event vs timer |
 | `Switch` | evaluate expression → walk matching case steps |
 | `Poll` | built-in `DeclarativeWorkflowPoller` sub-orchestration: call activity → evaluate `until` → `ContinueAsNew` with delay, or return |
+| `Loop` | built-in `DeclarativeWorkflowLoop` sub-orchestration: run inner steps → evaluate `break-when` → `ContinueAsNew` with delay, or return |
 
 **`WorkflowExecutionContext`** — carries resolved step outputs by name and exposes built-in variables (`orchestration.instanceId`, `orchestration.parentInstanceId`). Flows through the entire step walk.
 
@@ -61,6 +62,7 @@ The library ships four Azure Functions in `DeclarativeDurableFunctions.Functions
 | `GenericHttpTrigger` | `StartWorkflow` | `POST /api/workflows/{workflowName}` — starts any workflow |
 | `GenericEventTrigger` | `EventTrigger` | `POST /api/events/{instanceId}/{eventName}` — raises an external event |
 | `DeclarativePollerOrchestrator` | `DeclarativeWorkflowPoller` | Built-in sub-orchestrator for `type: poll` steps |
+| `DeclarativeLoopOrchestrator` | `DeclarativeWorkflowLoop` | Built-in sub-orchestrator for `type: loop` steps |
 
 Do not move these back to the test app. Adding this library to a Functions app is opting into this as a framework-level replacement for manually written orchestrators and triggers.
 

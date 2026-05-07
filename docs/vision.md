@@ -124,6 +124,7 @@ A parallel block launches all child steps concurrently from the same starting st
 | `foreach` | Array of all iteration results |
 | `wait-for-event` | Event payload; `null` if `on-timeout: continue` fires |
 | `poll` | Last activity result satisfying `until`; `null` if `on-timeout: continue` fires |
+| `loop` | Value of the loop's `output` variable on break; `null` if `on-timeout: continue` fires |
 | `switch` | `null` — switch routes execution and has no return value |
 | `parallel` (nested) | The nested block's aggregate object |
 | Any step with `condition: false` | `null` — the step was skipped |
@@ -224,7 +225,54 @@ Repeatedly calls an activity until a condition is met or a timeout expires. Impl
 - `ContinueAsNew` resets the orchestration history on each iteration — required for long polling windows (e.g., `PT30D`) where unbounded history growth would otherwise occur.
 - The `until` expression has full access to the expression language: comparisons, logical operators, null checks, nested property access.
 
-### 10. Combinations
+### 10. Retry loop with long delay
+
+Repeatedly executes a block of steps until a condition is met or a wall-clock timeout expires. Unlike `poll` (which loops a single activity call), `loop` runs an arbitrary step sequence on each iteration — making it suitable for patterns like "trigger-and-wait, retry hourly for 30 days."
+
+```yaml
+- name: WaitForSignal
+  type: loop
+  max-duration: P30D
+  delay: PT1H
+  break-when: "{{signalResult.status == 'success'}}"
+  on-timeout: continue
+  output: signalResult
+  steps:
+    - name: AttemptSignal
+      type: trigger-and-wait
+      activity: SendSignalActivity
+      input:
+        correlationId: "{{orchestration.instanceId}}"
+      event: SignalReceived
+      timeout: PT5M
+      on-timeout: continue
+      output: signalResult
+
+- name: NotifyOutcome
+  type: switch
+  on: "{{signalResult.status == 'success'}}"
+  cases:
+    "true":
+      - name: NotifySuccess
+        activity: SendTelegramMessageActivity
+        input: "{{signalResult.message}}"
+    "false":
+      - name: NotifyFailure
+        activity: SendTelegramMessageActivity
+        input: "No signal detected after 30 days."
+```
+
+**Loop semantics:**
+
+- Inner steps execute sequentially on each iteration. Any step type is valid inside the loop body.
+- After all inner steps complete, `break-when` is evaluated against the inner execution context (full access to inner step outputs by name).
+- If `break-when` is true, the loop exits. The value stored under the loop's `output` name in the inner context is stored in the parent context and returned.
+- If `break-when` is false and `max-duration` has not elapsed, the engine sleeps `delay` then restarts via `ContinueAsNew` (keeps history bounded regardless of iteration count).
+- If `max-duration` elapses: `on-timeout: fail` throws `WorkflowTimeoutException`; `on-timeout: continue` stores `null` and proceeds.
+- `output` names a variable produced by one of the inner steps. That variable's last known value is returned on both break and timeout-continue.
+- Implemented internally as `DeclarativeWorkflowLoop` sub-orchestration, following the same `ContinueAsNew` pattern as `DeclarativeWorkflowPoller`.
+
+### 11. Combinations
 
 All of the above compose freely. A `parallel` block can contain `foreach` steps. A `foreach` can invoke a sub-orchestration that itself has a `wait-for-event`. A `poll` step can appear inside a `parallel` block. Any nesting depth.
 
@@ -316,6 +364,7 @@ WorkflowRunner
     WaitForEvent     → context.WaitForExternalEvent<JsonElement>(name) raced against timer
     Switch           → evaluate expression → walk matching case steps
     Poll             → built-in DeclarativeWorkflowPoller sub-orchestration: call activity → evaluate until → ContinueAsNew with delay, or return
+    Loop             → built-in DeclarativeWorkflowLoop sub-orchestration: run inner steps → evaluate break-when → ContinueAsNew with delay, or return
 
 WorkflowExecutionContext
   Carries resolved step outputs by name.

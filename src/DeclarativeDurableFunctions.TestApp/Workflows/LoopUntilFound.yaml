@@ -1,0 +1,38 @@
+workflow:
+  name: LoopUntilFound
+  steps:
+
+    - name: PollForResult
+      type: loop
+      max-duration: PT5M
+      delay: PT1M
+      break-when: "{{scrapeResult.status == 'success'}}"
+      on-timeout: continue
+      output: scrapeResult
+      steps:
+        - name: AttemptScrape
+          type: trigger-and-wait
+          activity: SendRemoteWorkerSpaScrapingRequestActivity
+          input:
+            url: "{{input.siteUrl}}"
+            instruction: "{{input.prompt}}"
+            correlation_id: "{{orchestration.instanceId}}"
+          event: RemoteWorkCompleted
+          timeout: PT2M
+          on-timeout: continue
+          output: scrapeResult
+
+    - name: NotifyOutcome
+      type: switch
+      on: "{{scrapeResult.status == 'success'}}"
+      cases:
+        "true":
+          - name: NotifySuccess
+            activity: SendTelegramMessageActivity
+            input: "{{scrapeResult.result}}"
+            output: teamNotification
+        "false":
+          - name: NotifyFailure
+            activity: SendTelegramMessageActivity
+            input: "No result found after 5 minutes. Restart the workflow if necessary."
+            output: teamNotification

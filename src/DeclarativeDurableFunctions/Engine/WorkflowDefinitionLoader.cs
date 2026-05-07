@@ -18,12 +18,29 @@ internal static class WorkflowDefinitionLoader
         {
             var workflowName = Path.GetFileNameWithoutExtension(file);
             var yaml = File.ReadAllText(file);
-            definitions[workflowName] = LoadFromYaml(yaml, workflowName);
+            foreach (var (k, v) in LoadFromYamlAll(yaml, workflowName))
+                definitions[k] = v;
         }
         return definitions;
     }
 
     public static WorkflowDefinition LoadFromYaml(string yaml, string workflowName)
+    {
+        var accumulator = new Dictionary<string, WorkflowDefinition>(StringComparer.Ordinal);
+        return LoadFromYamlCore(yaml, workflowName, accumulator);
+    }
+
+    // Returns the top-level workflow and any inner loop workflows registered during parse.
+    internal static IReadOnlyDictionary<string, WorkflowDefinition> LoadFromYamlAll(string yaml, string workflowName)
+    {
+        var accumulator = new Dictionary<string, WorkflowDefinition>(StringComparer.Ordinal);
+        var def = LoadFromYamlCore(yaml, workflowName, accumulator);
+        accumulator[workflowName] = def;
+        return accumulator;
+    }
+
+    private static WorkflowDefinition LoadFromYamlCore(
+        string yaml, string workflowName, Dictionary<string, WorkflowDefinition> accumulator)
     {
         Dictionary<object, object> root;
         try
@@ -50,11 +67,12 @@ internal static class WorkflowDefinitionLoader
         {
             Name = workflowName,
             DisplayName = displayName,
-            Steps = ParseSteps(stepsRaw, workflowName)
+            Steps = ParseSteps(stepsRaw, workflowName, accumulator)
         };
     }
 
-    private static IReadOnlyList<StepDefinition> ParseSteps(List<object> stepsRaw, string workflowContext)
+    private static IReadOnlyList<StepDefinition> ParseSteps(
+        List<object> stepsRaw, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
         var steps = new List<StepDefinition>(stepsRaw.Count);
         foreach (var raw in stepsRaw)
@@ -62,12 +80,13 @@ internal static class WorkflowDefinitionLoader
             if (raw is not Dictionary<object, object> stepDict)
                 throw new WorkflowDefinitionException(
                     $"A step in workflow '{workflowContext}' is not a mapping.", workflowContext);
-            steps.Add(ParseStep(stepDict, workflowContext));
+            steps.Add(ParseStep(stepDict, workflowContext, accumulator));
         }
         return steps.AsReadOnly();
     }
 
-    private static StepDefinition ParseStep(Dictionary<object, object> dict, string workflowContext)
+    private static StepDefinition ParseStep(
+        Dictionary<object, object> dict, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
         var name = GetString(dict, "name");
         var typeStr = GetString(dict, "type");
@@ -93,6 +112,8 @@ internal static class WorkflowDefinitionLoader
             new Dictionary<string, IReadOnlyList<StepDefinition>>();
         string? until = null;
         string? delay = null;
+        string? breakWhen = null;
+        string? loopWorkflowName = null;
 
         switch (stepType)
         {
@@ -114,7 +135,7 @@ internal static class WorkflowDefinitionLoader
                 if (parallelStepsRaw == null)
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (parallel) is missing required 'steps' sequence.", workflowContext);
-                subSteps = ParseSteps(parallelStepsRaw, workflowContext);
+                subSteps = ParseSteps(parallelStepsRaw, workflowContext, accumulator);
                 foreach (var child in subSteps)
                 {
                     if (child.Output != null)
@@ -147,7 +168,7 @@ internal static class WorkflowDefinitionLoader
                 if (casesRaw == null)
                     throw new WorkflowDefinitionException(
                         $"Step '{name}' (switch) is missing required 'cases' field.", workflowContext);
-                cases = ParseCases(casesRaw, workflowContext);
+                cases = ParseCases(casesRaw, workflowContext, accumulator);
                 break;
 
             case StepType.Poll:
@@ -188,6 +209,40 @@ internal static class WorkflowDefinitionLoader
                         $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
                         workflowContext);
                 break;
+
+            case StepType.Loop:
+                if (name == null)
+                    throw new WorkflowDefinitionException(
+                        "Loop steps must have a 'name' field.", workflowContext);
+                if (output == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (loop) is missing required 'output' field.", workflowContext);
+                breakWhen = GetString(dict, "break-when");
+                if (breakWhen == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (loop) is missing required 'break-when' field.", workflowContext);
+                delay = GetString(dict, "delay");
+                if (delay == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (loop) is missing required 'delay' field.", workflowContext);
+                timeout = GetString(dict, "max-duration");
+                onTimeout = GetString(dict, "on-timeout") ?? "fail";
+                if (onTimeout != "fail" && onTimeout != "continue")
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}': 'on-timeout' must be 'fail' or 'continue', got '{onTimeout}'.",
+                        workflowContext);
+                var loopStepsRaw = GetList(dict, "steps");
+                if (loopStepsRaw == null)
+                    throw new WorkflowDefinitionException(
+                        $"Step '{name}' (loop) is missing required 'steps' sequence.", workflowContext);
+                subSteps = ParseSteps(loopStepsRaw, workflowContext, accumulator);
+                loopWorkflowName = $"__loop__{workflowContext}__{name}";
+                accumulator[loopWorkflowName] = new WorkflowDefinition
+                {
+                    Name = loopWorkflowName,
+                    Steps = subSteps
+                };
+                break;
         }
 
         return new StepDefinition
@@ -209,7 +264,9 @@ internal static class WorkflowDefinitionLoader
             SwitchOn = switchOn,
             Cases = cases,
             Until = until,
-            Delay = delay
+            Delay = delay,
+            BreakWhen = breakWhen,
+            LoopWorkflowName = loopWorkflowName
         };
     }
 
@@ -238,6 +295,7 @@ internal static class WorkflowDefinitionLoader
             "switch"           => StepType.Switch,
             "poll"             => StepType.Poll,
             "trigger-and-wait" => StepType.TriggerAndWait,
+            "loop"             => StepType.Loop,
             null               => throw new WorkflowDefinitionException(
                                     $"Cannot infer step type for step '{stepName}': no 'activity', 'workflow', or 'type' field.",
                                     workflowContext),
@@ -247,7 +305,7 @@ internal static class WorkflowDefinitionLoader
     }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<StepDefinition>> ParseCases(
-        Dictionary<object, object> casesDict, string workflowContext)
+        Dictionary<object, object> casesDict, string workflowContext, Dictionary<string, WorkflowDefinition> accumulator)
     {
         var result = new Dictionary<string, IReadOnlyList<StepDefinition>>(StringComparer.Ordinal);
         foreach (var (key, value) in casesDict)
@@ -256,7 +314,7 @@ internal static class WorkflowDefinitionLoader
             if (value is not List<object> stepsRaw)
                 throw new WorkflowDefinitionException(
                     $"Switch case '{caseKey}' must be a sequence of steps.", workflowContext);
-            result[caseKey] = ParseSteps(stepsRaw, workflowContext);
+            result[caseKey] = ParseSteps(stepsRaw, workflowContext, accumulator);
         }
         return result;
     }

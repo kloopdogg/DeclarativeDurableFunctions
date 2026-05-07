@@ -710,4 +710,203 @@ public class WorkflowDefinitionRegistryTests
             WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadWorkflow"));
         Assert.Contains("on-timeout", ex.Message);
     }
+
+    // ---- Round-trip: loop step ----
+
+    [Fact]
+    public void LoadFromYaml_LoopStep_ParsesAllFields()
+    {
+        const string yaml = """
+            workflow:
+              name: RetryWorkflow
+              steps:
+                - name: RetryUntilDone
+                  type: loop
+                  max-duration: P30D
+                  delay: PT1H
+                  break-when: "{{result.status == 'success'}}"
+                  on-timeout: continue
+                  output: result
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      input: "{{input.data}}"
+                      output: result
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "RetryWorkflow").Steps[0];
+
+        Assert.Equal(StepType.Loop, step.Type);
+        Assert.Equal("P30D", step.Timeout);
+        Assert.Equal("PT1H", step.Delay);
+        Assert.Equal("{{result.status == 'success'}}", step.BreakWhen);
+        Assert.Equal("continue", step.OnTimeout);
+        Assert.Equal("result", step.Output);
+        Assert.Single(step.Steps);
+        Assert.Equal("DoWork", step.Steps[0].Name);
+        Assert.Equal("WorkActivity", step.Steps[0].ActivityName);
+        Assert.NotNull(step.LoopWorkflowName);
+        Assert.Equal("__loop__RetryWorkflow__RetryUntilDone", step.LoopWorkflowName);
+    }
+
+    [Fact]
+    public void LoadFromYaml_LoopStep_DefaultOnTimeoutIsFail()
+    {
+        const string yaml = """
+            workflow:
+              name: LoopWorkflow
+              steps:
+                - name: Retry
+                  type: loop
+                  delay: PT1H
+                  break-when: "{{result.done}}"
+                  output: result
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      output: result
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "LoopWorkflow").Steps[0];
+        Assert.Equal("fail", step.OnTimeout);
+        Assert.Null(step.Timeout);
+    }
+
+    [Fact]
+    public void LoadFromYamlAll_LoopStep_RegistersInnerWorkflow()
+    {
+        const string yaml = """
+            workflow:
+              name: RetryWorkflow
+              steps:
+                - name: RetryUntilDone
+                  type: loop
+                  delay: PT1H
+                  break-when: "{{result.done}}"
+                  output: result
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      output: result
+            """;
+
+        var all = WorkflowDefinitionLoader.LoadFromYamlAll(yaml, "RetryWorkflow");
+
+        Assert.True(all.ContainsKey("RetryWorkflow"));
+        Assert.True(all.ContainsKey("__loop__RetryWorkflow__RetryUntilDone"));
+
+        var innerDef = all["__loop__RetryWorkflow__RetryUntilDone"];
+        Assert.Single(innerDef.Steps);
+        Assert.Equal("DoWork", innerDef.Steps[0].Name);
+    }
+
+    // ---- Validation: loop required fields ----
+
+    [Fact]
+    public void LoadFromYaml_LoopWithoutBreakWhen_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadLoop
+              steps:
+                - name: Retry
+                  type: loop
+                  delay: PT1H
+                  output: result
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      output: result
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
+        Assert.Contains("break-when", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_LoopWithoutDelay_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadLoop
+              steps:
+                - name: Retry
+                  type: loop
+                  break-when: "{{result.done}}"
+                  output: result
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      output: result
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
+        Assert.Contains("delay", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_LoopWithoutOutput_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadLoop
+              steps:
+                - name: Retry
+                  type: loop
+                  delay: PT1H
+                  break-when: "{{result.done}}"
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
+        Assert.Contains("output", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_LoopWithoutSteps_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadLoop
+              steps:
+                - name: Retry
+                  type: loop
+                  delay: PT1H
+                  break-when: "{{result.done}}"
+                  output: result
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
+        Assert.Contains("steps", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_LoopWithInvalidOnTimeout_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: BadLoop
+              steps:
+                - name: Retry
+                  type: loop
+                  delay: PT1H
+                  break-when: "{{result.done}}"
+                  output: result
+                  on-timeout: skip
+                  steps:
+                    - name: DoWork
+                      activity: WorkActivity
+                      output: result
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
+        Assert.Contains("on-timeout", ex.Message);
+    }
 }
