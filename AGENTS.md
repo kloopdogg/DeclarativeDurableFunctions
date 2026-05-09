@@ -14,6 +14,10 @@ See [`docs/vision.md`](docs/vision.md) for the full design: YAML schema, express
 - C# first; Python/JS are future considerations
 - NuGet package delivery
 
+## Coding rules
+
+- Never use a "river" of assignments (i.e.g, no aligned = in object initializers)
+
 ## Build and test commands
 
 > The project is in early design phase. Update this section as the solution structure is established.

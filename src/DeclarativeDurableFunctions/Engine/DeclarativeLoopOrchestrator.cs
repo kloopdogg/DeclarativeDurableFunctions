@@ -29,7 +29,7 @@ sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry registry)
             execCtx.SetOutput(key, value.Clone());
         }
 
-        _ = await DynamicWorkflowRunner.RunAsync(context, innerDef, execCtx);
+        _ = await DynamicWorkflowRunner.RunAsync(context, innerDef, execCtx, registry);
 
         var currentOutput = GetOutput(execCtx, input.OutputName);
 

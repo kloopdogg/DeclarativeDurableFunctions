@@ -1041,4 +1041,130 @@ public class WorkflowRunnerTests
         Assert.True(execCtx.HasOutput("result"));
         Assert.Null(execCtx.GetOutput("result"));
     }
+
+    // ---- Versioned dispatch via DynamicWorkflowRunner ----
+
+    static IWorkflowDefinitionRegistryInternal MakeRegistry(string baseName, int latestVersion)
+    {
+        var registry = Substitute.For<IWorkflowDefinitionRegistryInternal>();
+        registry.ResolveVersionedName(baseName).Returns($"{baseName}:{latestVersion}");
+        return registry;
+    }
+
+    static WorkflowDefinition MakeDynamicDef(params StepDefinition[] steps)
+        => new() { Name = "TestWorkflow", Version = 1, Steps = steps };
+
+    [Fact]
+    public async Task SubOrchestration_WithExplicitVersion_UsesVersionedNameDirectly()
+    {
+        var (context, execCtx) = MakeContext();
+        object? capturedEnvelope = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedEnvelope = callInfo[1];
+                return Task.FromResult(Json("{}"));
+            });
+        var registry = MakeRegistry("Sub", latestVersion: 2);
+
+        await DynamicWorkflowRunner.RunAsync(context, MakeDynamicDef(new StepDefinition
+        {
+            Name = "RunSub",
+            Type = StepType.SubOrchestration,
+            WorkflowName = "Sub",
+            WorkflowVersion = "1"   // explicit pin: v1, even though latest is v2
+        }), execCtx, registry);
+
+        var envelope = Assert.IsType<Dictionary<string, object?>>(capturedEnvelope);
+        Assert.Equal("Sub:1", envelope["__workflow"]);
+        registry.DidNotReceive().ResolveVersionedName(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task SubOrchestration_WithoutVersion_ResolvesToLatestViaRegistry()
+    {
+        var (context, execCtx) = MakeContext();
+        object? capturedEnvelope = null;
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedEnvelope = callInfo[1];
+                return Task.FromResult(Json("{}"));
+            });
+        var registry = MakeRegistry("Sub", latestVersion: 2);
+
+        await DynamicWorkflowRunner.RunAsync(context, MakeDynamicDef(new StepDefinition
+        {
+            Name = "RunSub",
+            Type = StepType.SubOrchestration,
+            WorkflowName = "Sub",
+            WorkflowVersion = null   // no pin: should resolve to latest
+        }), execCtx, registry);
+
+        var envelope = Assert.IsType<Dictionary<string, object?>>(capturedEnvelope);
+        Assert.Equal("Sub:2", envelope["__workflow"]);
+        registry.Received(1).ResolveVersionedName("Sub");
+    }
+
+    [Fact]
+    public async Task Foreach_SubOrch_WithExplicitVersion_UsesVersionedName()
+    {
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"items":[1,2]}""");
+        var capturedEnvelopes = new List<object?>();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedEnvelopes.Add(callInfo[1]);
+                return Task.FromResult(Json("{}"));
+            });
+        var registry = MakeRegistry("Sub", latestVersion: 2);
+
+        await DynamicWorkflowRunner.RunAsync(context, MakeDynamicDef(new StepDefinition
+        {
+            Name = "ForeachSub",
+            Type = StepType.Foreach,
+            Source = "{{input.items}}",
+            WorkflowName = "Sub",
+            WorkflowVersion = "1"   // explicit pin
+        }), execCtx, registry);
+
+        Assert.Equal(2, capturedEnvelopes.Count);
+        foreach (object? env in capturedEnvelopes)
+        {
+            var dict = Assert.IsType<Dictionary<string, object?>>(env);
+            Assert.Equal("Sub:1", dict["__workflow"]);
+        }
+        registry.DidNotReceive().ResolveVersionedName(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task Foreach_SubOrch_WithoutVersion_ResolvesToLatest()
+    {
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"items":[1,2]}""");
+        var capturedEnvelopes = new List<object?>();
+        context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
+            .Returns(callInfo =>
+            {
+                capturedEnvelopes.Add(callInfo[1]);
+                return Task.FromResult(Json("{}"));
+            });
+        var registry = MakeRegistry("Sub", latestVersion: 2);
+
+        await DynamicWorkflowRunner.RunAsync(context, MakeDynamicDef(new StepDefinition
+        {
+            Name = "ForeachSub",
+            Type = StepType.Foreach,
+            Source = "{{input.items}}",
+            WorkflowName = "Sub",
+            WorkflowVersion = null   // resolve to latest
+        }), execCtx, registry);
+
+        Assert.Equal(2, capturedEnvelopes.Count);
+        foreach (object? env in capturedEnvelopes)
+        {
+            var dict = Assert.IsType<Dictionary<string, object?>>(env);
+            Assert.Equal("Sub:2", dict["__workflow"]);
+        }
+        registry.Received().ResolveVersionedName("Sub");
+    }
 }

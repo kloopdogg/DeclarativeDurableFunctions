@@ -31,4 +31,7 @@ sealed class StepDefinition
     // Loop
     public string? BreakWhen { get; init; }
     public string? LoopWorkflowName { get; init; }
+
+    // Sub-orchestration / Foreach: explicit version pin; null = resolve to latest at dispatch time
+    public string? WorkflowVersion { get; init; }
 }

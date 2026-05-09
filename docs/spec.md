@@ -104,7 +104,11 @@ YAML workflow files are part of the Functions app, not the library. In the TestA
 
 ### 1.10 Workflow Name Resolution
 
-The workflow name is the YAML **filename without extension**, case-preserved. The `workflow.name` field inside the YAML is optional metadata (used for logging only). The `GenericOrchestrator` reads the workflow name from the `__workflow` key in the Durable instance input envelope — there are no per-workflow `[Function]` attributes for consumers to maintain.
+The workflow name is the YAML **filename without extension with any `-vN` suffix stripped**, case-preserved. For example, `OrderFulfillment-v2.yaml` resolves to base name `OrderFulfillment`. The `workflow.name` field inside the YAML is optional metadata (used for logging only).
+
+The registry key for each workflow is `"{baseName}:{version}"` where `version` comes from the `workflow.version:` field in the YAML (default: `1`). For example, `OrderFulfillment-v2.yaml` with `version: 2` registers as `"OrderFulfillment:2"`.
+
+The `GenericOrchestrator` reads the workflow name from the `__workflow` key in the Durable instance input envelope — the key always stores the versioned name (e.g., `"OrderFulfillment:2"`) — there are no per-workflow `[Function]` attributes for consumers to maintain.
 
 ---
 
@@ -348,6 +352,7 @@ public class OrderFulfillmentHttpTrigger
 ```yaml
 workflow:
   name: <string>      # optional; metadata only; workflow identity comes from filename
+  version: <int>      # optional; positive integer; defaults to 1; registry key is "{baseName}:{version}"
   steps:
     - <step>
     - <step>
@@ -394,7 +399,8 @@ workflow:
 ```yaml
 - name: RunSubWorkflow
   type: sub-orchestration
-  workflow: OrderValidation     # required; must match a registered workflow filename
+  workflow: OrderValidation     # required; must match a registered workflow base name
+  version: 1                   # optional; positive integer; pins to exact version at dispatch time
   input: "{{input}}"           # optional
   output: validationResult     # optional
   instanceId: "{{input.orderId}}"  # optional; expression for sub-orchestration instance ID suffix
@@ -408,6 +414,7 @@ workflow:
 - Full instance ID: `{parentInstanceId}:{stepName}:{resolvedSuffix}`
 - `step.Name` is required when `type: sub-orchestration` is explicit.
 - `retry` maps to `TaskRetryPolicy` and is passed through `SubOrchestrationOptions` (which inherits `TaskOptions`). Both instance ID and retry policy are set on the same options object — there is no separate `TaskOptions` for sub-orchestration calls.
+- `version` is optional. If omitted, the sub-orchestration resolves to the current latest registered version at the moment the step first executes. If present, the versioned name `"{workflow}:{version}"` must exist in the registry at execution time.
 
 ### 5.6 Foreach Step
 
@@ -417,6 +424,8 @@ workflow:
   source: "{{input.lineItems}}"  # required; must evaluate to a JSON array
   activity: ReserveItemActivity  # mutually exclusive with workflow
   # workflow: SomeWorkflow       # alternative: foreach over sub-orchestration
+  version: 1                     # optional; positive integer; pins workflow to exact version
+                                 # only meaningful when workflow is set; silently ignored for activity
   input:                         # optional; $item and $index available in expressions
     parent:
       orchestrationId: "{{orchestration.instanceId}}"
@@ -438,6 +447,7 @@ workflow:
 - If `instanceId` is omitted and `workflow` is set, `context.NewGuid()` is used per iteration.
 - `$item` and `$index` are available in both `input` and `instanceId` expressions.
 - `$item` is the current element; `$index` is the 0-based integer index. Both are only valid within this step.
+- `version` is optional (applies only when `workflow` is set). If omitted, resolves to the current latest registered version. If present, the versioned name `"{workflow}:{version}"` must exist in the registry at execution time.
 
 ### 5.7 Parallel Step
 
@@ -832,13 +842,14 @@ public class WorkflowDefinitionRegistryOptions
 // never call Get() directly.
 public interface IWorkflowDefinitionRegistry
 {
-    IReadOnlyCollection<string> WorkflowNames { get; }
+    IReadOnlyCollection<string> WorkflowNames { get; }  // all versioned keys, e.g. "OrderFulfillment:2"
+    string ResolveVersionedName(string workflowName);   // unversioned → "{name}:{latest}"; versioned → passthrough
 }
 
 // Engine-internal only — not visible to library consumers
 internal interface IWorkflowDefinitionRegistryInternal : IWorkflowDefinitionRegistry
 {
-    WorkflowDefinition Get(string workflowName);
+    WorkflowDefinition Get(string workflowName);         // accepts versioned or unversioned name
     bool TryGet(string workflowName, out WorkflowDefinition? definition);
 }
 
@@ -925,13 +936,18 @@ internal sealed class StepDefinition
     // Loop
     public string? BreakWhen { get; init; }  // required for Loop; boolean expression
     // MaxDuration reuses Timeout field (ISO 8601); Steps reuses the Steps field from Parallel
+
+    // Sub-orchestration / Foreach: explicit version pin; null = resolve to latest at dispatch time
+    public string? WorkflowVersion { get; init; }
 }
 
 // Models/WorkflowDefinition.cs
 internal sealed class WorkflowDefinition
 {
-    public string Name { get; init; } = string.Empty;   // from filename
-    public string? DisplayName { get; init; }            // from workflow.name in YAML
+    public string Name { get; init; } = string.Empty;   // base name from filename (no -vN suffix)
+    public string? DisplayName { get; init; }            // from workflow.name in YAML; metadata only
+    public int Version { get; init; } = 1;              // from workflow.version in YAML; default 1
+    public string VersionedName => $"{Name}:{Version}"; // computed registry key, e.g. "OrderFulfillment:2"
     public IReadOnlyList<StepDefinition> Steps { get; init; } = [];
 }
 ```

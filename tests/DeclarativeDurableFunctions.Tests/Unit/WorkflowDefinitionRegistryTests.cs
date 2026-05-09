@@ -397,11 +397,10 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void Registry_Get_ReturnsDefinition_WhenWorkflowExists()
     {
-        var def = new WorkflowDefinition { Name = "MyWorkflow", Steps = [] };
-        var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>
-        {
-            ["MyWorkflow"] = def
-        });
+        var def = new WorkflowDefinition { Name = "MyWorkflow", Version = 1, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:1"] = def },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 1 });
 
         var result = registry.Get("MyWorkflow");
         Assert.Equal("MyWorkflow", result.Name);
@@ -410,7 +409,9 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void Registry_Get_ThrowsWorkflowDefinitionException_WhenNotFound()
     {
-        var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>());
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
 
         var ex = Assert.Throws<WorkflowDefinitionException>(() => registry.Get("Missing"));
         Assert.Equal("Missing", ex.WorkflowName);
@@ -419,11 +420,10 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void Registry_TryGet_ReturnsTrueAndDefinition_WhenFound()
     {
-        var def = new WorkflowDefinition { Name = "MyWorkflow", Steps = [] };
-        var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>
-        {
-            ["MyWorkflow"] = def
-        });
+        var def = new WorkflowDefinition { Name = "MyWorkflow", Version = 1, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:1"] = def },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 1 });
 
         bool found = registry.TryGet("MyWorkflow", out var result);
         Assert.True(found);
@@ -433,7 +433,9 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void Registry_TryGet_ReturnsFalse_WhenNotFound()
     {
-        var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>());
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
 
         bool found = registry.TryGet("Missing", out var result);
         Assert.False(found);
@@ -443,14 +445,16 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void Registry_WorkflowNames_ContainsAllLoadedWorkflows()
     {
-        var registry = new WorkflowDefinitionRegistry(new Dictionary<string, WorkflowDefinition>
-        {
-            ["Alpha"] = new WorkflowDefinition { Name = "Alpha", Steps = [] },
-            ["Beta"] = new WorkflowDefinition { Name = "Beta", Steps = [] }
-        });
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition>
+            {
+                ["Alpha:1"] = new WorkflowDefinition { Name = "Alpha", Version = 1, Steps = [] },
+                ["Beta:1"] = new WorkflowDefinition { Name = "Beta", Version = 1, Steps = [] }
+            },
+            latestVersions: new Dictionary<string, int> { ["Alpha"] = 1, ["Beta"] = 1 });
 
-        Assert.Contains("Alpha", registry.WorkflowNames);
-        Assert.Contains("Beta", registry.WorkflowNames);
+        Assert.Contains("Alpha:1", registry.WorkflowNames);
+        Assert.Contains("Beta:1", registry.WorkflowNames);
         Assert.Equal(2, registry.WorkflowNames.Count);
     }
 
@@ -746,7 +750,7 @@ public class WorkflowDefinitionRegistryTests
         Assert.Equal("DoWork", step.Steps[0].Name);
         Assert.Equal("WorkActivity", step.Steps[0].ActivityName);
         Assert.NotNull(step.LoopWorkflowName);
-        Assert.Equal("__loop__RetryWorkflow__RetryUntilDone", step.LoopWorkflowName);
+        Assert.Equal("__loop__RetryWorkflow:1__RetryUntilDone", step.LoopWorkflowName);
     }
 
     [Fact]
@@ -792,10 +796,10 @@ public class WorkflowDefinitionRegistryTests
 
         var all = WorkflowDefinitionLoader.LoadFromYamlAll(yaml, "RetryWorkflow");
 
-        Assert.True(all.ContainsKey("RetryWorkflow"));
-        Assert.True(all.ContainsKey("__loop__RetryWorkflow__RetryUntilDone"));
+        Assert.True(all.ContainsKey("RetryWorkflow:1"));
+        Assert.True(all.ContainsKey("__loop__RetryWorkflow:1__RetryUntilDone"));
 
-        var innerDef = all["__loop__RetryWorkflow__RetryUntilDone"];
+        var innerDef = all["__loop__RetryWorkflow:1__RetryUntilDone"];
         Assert.Single(innerDef.Steps);
         Assert.Equal("DoWork", innerDef.Steps[0].Name);
     }
@@ -908,5 +912,265 @@ public class WorkflowDefinitionRegistryTests
         var ex = Assert.Throws<WorkflowDefinitionException>(() =>
             WorkflowDefinitionLoader.LoadFromYaml(yaml, "BadLoop"));
         Assert.Contains("on-timeout", ex.Message);
+    }
+
+    // ---- Versioning: loader ----
+
+    [Fact]
+    public void LoadFromYaml_WithVersionField_ParsesVersion()
+    {
+        const string yaml = """
+            workflow:
+              name: My Workflow
+              version: 3
+              steps:
+                - name: DoWork
+                  activity: WorkActivity
+            """;
+
+        var def = WorkflowDefinitionLoader.LoadFromYaml(yaml, "MyWorkflow");
+
+        Assert.Equal(3, def.Version);
+        Assert.Equal("MyWorkflow:3", def.VersionedName);
+    }
+
+    [Fact]
+    public void LoadFromYaml_WithoutVersionField_DefaultsToVersion1()
+    {
+        const string yaml = """
+            workflow:
+              name: My Workflow
+              steps:
+                - name: DoWork
+                  activity: WorkActivity
+            """;
+
+        var def = WorkflowDefinitionLoader.LoadFromYaml(yaml, "MyWorkflow");
+
+        Assert.Equal(1, def.Version);
+        Assert.Equal("MyWorkflow:1", def.VersionedName);
+    }
+
+    [Fact]
+    public void LoadFromYaml_VersionFieldLessThanOne_ThrowsWorkflowDefinitionException()
+    {
+        const string yaml = """
+            workflow:
+              name: My Workflow
+              version: 0
+              steps:
+                - name: DoWork
+                  activity: WorkActivity
+            """;
+
+        var ex = Assert.Throws<WorkflowDefinitionException>(() =>
+            WorkflowDefinitionLoader.LoadFromYaml(yaml, "MyWorkflow"));
+        Assert.Contains("version", ex.Message);
+    }
+
+    [Fact]
+    public void LoadFromYaml_SubOrchestrationStepWithVersion_ParsesWorkflowVersion()
+    {
+        const string yaml = """
+            workflow:
+              name: Parent
+              steps:
+                - name: RunSub
+                  type: sub-orchestration
+                  workflow: OrderValidation
+                  version: 2
+                  output: result
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "Parent").Steps[0];
+
+        Assert.Equal("2", step.WorkflowVersion);
+    }
+
+    [Fact]
+    public void LoadFromYaml_SubOrchestrationStepWithoutVersion_WorkflowVersionIsNull()
+    {
+        const string yaml = """
+            workflow:
+              name: Parent
+              steps:
+                - name: RunSub
+                  type: sub-orchestration
+                  workflow: OrderValidation
+                  output: result
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "Parent").Steps[0];
+
+        Assert.Null(step.WorkflowVersion);
+    }
+
+    [Fact]
+    public void LoadFromYaml_ForeachStepWithVersion_ParsesWorkflowVersion()
+    {
+        const string yaml = """
+            workflow:
+              name: Parent
+              steps:
+                - name: FulfillEach
+                  type: foreach
+                  source: "{{input.items}}"
+                  workflow: FulfillLineItem
+                  version: 1
+                  output: results
+            """;
+
+        var step = WorkflowDefinitionLoader.LoadFromYaml(yaml, "Parent").Steps[0];
+
+        Assert.Equal("1", step.WorkflowVersion);
+    }
+
+    // ---- Versioning: registry ----
+
+    [Fact]
+    public void Registry_GetByVersionedName_ReturnsCorrectDefinition()
+    {
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:2"] = v2 },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        var result = registry.Get("MyWorkflow:2");
+        Assert.Equal(2, result.Version);
+    }
+
+    [Fact]
+    public void Registry_GetByUnversionedName_ReturnsLatestVersion()
+    {
+        var v1 = new WorkflowDefinition { Name = "MyWorkflow", Version = 1, Steps = [] };
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition>
+            {
+                ["MyWorkflow:1"] = v1,
+                ["MyWorkflow:2"] = v2
+            },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        var result = registry.Get("MyWorkflow");
+        Assert.Equal(2, result.Version);
+    }
+
+    [Fact]
+    public void Registry_GetUnknownWorkflow_ThrowsWorkflowDefinitionException()
+    {
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
+
+        Assert.Throws<WorkflowDefinitionException>(() => registry.Get("Unknown"));
+    }
+
+    [Fact]
+    public void Registry_GetUnknownVersionedName_ThrowsWorkflowDefinitionException()
+    {
+        var v1 = new WorkflowDefinition { Name = "MyWorkflow", Version = 1, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:1"] = v1 },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 1 });
+
+        Assert.Throws<WorkflowDefinitionException>(() => registry.Get("MyWorkflow:99"));
+    }
+
+    [Fact]
+    public void Registry_TryGetByVersionedName_ReturnsTrueAndDefinition()
+    {
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:2"] = v2 },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        bool found = registry.TryGet("MyWorkflow:2", out var def);
+
+        Assert.True(found);
+        Assert.NotNull(def);
+        Assert.Equal(2, def.Version);
+    }
+
+    [Fact]
+    public void Registry_TryGetByUnversionedName_ResolvesToLatest()
+    {
+        var v1 = new WorkflowDefinition { Name = "MyWorkflow", Version = 1, Steps = [] };
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition>
+            {
+                ["MyWorkflow:1"] = v1,
+                ["MyWorkflow:2"] = v2
+            },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        bool found = registry.TryGet("MyWorkflow", out var def);
+
+        Assert.True(found);
+        Assert.NotNull(def);
+        Assert.Equal(2, def.Version);
+    }
+
+    [Fact]
+    public void Registry_TryGetUnknownWorkflow_ReturnsFalse()
+    {
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
+
+        bool found = registry.TryGet("Unknown", out var def);
+
+        Assert.False(found);
+        Assert.Null(def);
+    }
+
+    [Fact]
+    public void Registry_ResolveVersionedName_AlreadyVersioned_PassesThrough()
+    {
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:2"] = v2 },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        string result = registry.ResolveVersionedName("MyWorkflow:2");
+
+        Assert.Equal("MyWorkflow:2", result);
+    }
+
+    [Fact]
+    public void Registry_ResolveVersionedName_UnversionedName_ReturnsLatest()
+    {
+        var v2 = new WorkflowDefinition { Name = "MyWorkflow", Version = 2, Steps = [] };
+        var registry = new WorkflowDefinitionRegistry(
+            definitions: new Dictionary<string, WorkflowDefinition> { ["MyWorkflow:2"] = v2 },
+            latestVersions: new Dictionary<string, int> { ["MyWorkflow"] = 2 });
+
+        string result = registry.ResolveVersionedName("MyWorkflow");
+
+        Assert.Equal("MyWorkflow:2", result);
+    }
+
+    [Fact]
+    public void Registry_ResolveVersionedName_LoopInnerNameWithEmbeddedColon_PassesThrough()
+    {
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
+
+        string loopName = "__loop__MyWorkflow:2__StepName";
+        string result = registry.ResolveVersionedName(loopName);
+
+        Assert.Equal(loopName, result);
+    }
+
+    [Fact]
+    public void Registry_ResolveVersionedName_UnknownWorkflow_ThrowsWorkflowDefinitionException()
+    {
+        var registry = new WorkflowDefinitionRegistry(
+            new Dictionary<string, WorkflowDefinition>(),
+            new Dictionary<string, int>());
+
+        Assert.Throws<WorkflowDefinitionException>(() => registry.ResolveVersionedName("Unknown"));
     }
 }

@@ -51,7 +51,7 @@ public static class DynamicOrchestrationContextExtensions
         }
 
         var execCtx = new WorkflowExecutionContext(actualInput, context);
-        return DynamicWorkflowRunner.RunAsync(context, definition, execCtx);
+        return DynamicWorkflowRunner.RunAsync(context, definition, execCtx, internalRegistry);
     }
 
     static JsonElement ResolveInput(TaskOrchestrationContext context)

@@ -9,6 +9,7 @@ namespace DeclarativeDurableFunctions.Engine;
 public interface IWorkflowDefinitionRegistry
 {
     IReadOnlyCollection<string> WorkflowNames { get; }
+    string ResolveVersionedName(string workflowName);
 }
 
 // Internal extension used by the engine — consumers never see WorkflowDefinition directly.

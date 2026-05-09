@@ -42,6 +42,9 @@ ScaffoldingReadMe.txt
 # dotenv environment variables file
 .env
 
+# macOS
+.DS_Store
+
 # Others
 ~$*
 *~

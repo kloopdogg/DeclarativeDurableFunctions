@@ -21,8 +21,8 @@ public static class ServiceCollectionExtensions
             ? options.WorkflowsDirectory
             : Path.Combine(AppContext.BaseDirectory, options.WorkflowsDirectory);
 
-        var definitions = WorkflowDefinitionLoader.LoadAll(directory);
-        var registry = new WorkflowDefinitionRegistry(definitions);
+        var (definitions, latestVersions) = WorkflowDefinitionLoader.LoadAll(directory);
+        var registry = new WorkflowDefinitionRegistry(definitions, latestVersions);
         _ = services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
         return services;
     }

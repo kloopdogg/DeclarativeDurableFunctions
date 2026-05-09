@@ -4,53 +4,19 @@ A NuGet package that brings declarative, YAML-driven workflow definitions to Azu
 
 ## The idea
 
-Azure Durable Functions are powerful. Orchestrator function code is not fun to write or read. This project puts a thin declarative layer on top of the Durable Functions runtime: you describe your workflow in YAML, write your activity functions in C# as normal, and the framework handles orchestration.
+Azure Durable Functions are powerful, but orchestrator code has some real problems:
 
-```yaml
-workflow:
-  name: OrderFulfillment
-  steps:
-    - name: ValidateOrder
-      activity: ValidateOrderActivity
-      output: validation
+- ❌ Tedious to write — replay constraints, determinism rules, and boilerplate everywhere
+- ❌ Painful to review — the control flow is obscured by SDK ceremony
+- ❌ Hard to hand off — new team members have to learn how Durable Functions replay works before they can touch it
 
-    - name: FulfillLineItems
-      type: foreach
-      source: "{{input.lineItems}}"
-      workflow: FulfillLineItem
-      input:
-        parent:
-          orchestrationId: "{{orchestration.instanceId}}"
-          correlationId: "{{input.correlationId}}"
-        data: "{{$item}}"
-      output: fulfillmentResults
+None of that has anything to do with the business problem you're actually solving.
 
-    - name: WaitForApproval
-      type: wait-for-event
-      event: OrderApproved
-      timeout: P7D
-      output: approval
+This project eliminates orchestrator code entirely. Describe your workflow in YAML, write your activity functions in C# as you normally would, and the framework drives the Durable Functions runtime underneath. The result:
 
-    - name: Finalize
-      type: parallel
-      steps:
-        - activity: SendConfirmationEmailActivity
-        - activity: UpdateInventoryActivity
-```
-
-Register the engine and start workflows via HTTP — no orchestrator code to write:
-
-```csharp
-// Program.cs
-services.AddDeclarativeWorkflows();
-```
-
-```http
-POST /api/workflows/OrderFulfillment
-Content-Type: application/json
-
-{ "orderId": "123", "lineItems": [...] }
-```
+- ✅ A workflow a non-engineer can read
+- ✅ A diff a reviewer can audit in minutes
+- ✅ A file a new team member can modify without first understanding how Durable Functions replay works
 
 ## Supported workflow patterns
 

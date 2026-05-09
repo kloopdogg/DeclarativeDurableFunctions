@@ -1,14 +1,19 @@
+using System.Text.RegularExpressions;
 using DeclarativeDurableFunctions.Exceptions;
 using DeclarativeDurableFunctions.Models;
 using YamlDotNet.Serialization;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-static class WorkflowDefinitionLoader
+static partial class WorkflowDefinitionLoader
 {
     static readonly IDeserializer Deserializer = new DeserializerBuilder().Build();
 
-    public static IReadOnlyDictionary<string, WorkflowDefinition> LoadAll(string directory)
+    [GeneratedRegex(@"-v\d+$")]
+    private static partial Regex VersionSuffixRegex();
+
+    public static (IReadOnlyDictionary<string, WorkflowDefinition> Definitions,
+                   IReadOnlyDictionary<string, int> LatestVersions) LoadAll(string directory)
     {
         if (!Directory.Exists(directory))
         {
@@ -16,17 +21,29 @@ static class WorkflowDefinitionLoader
         }
 
         var definitions = new Dictionary<string, WorkflowDefinition>(StringComparer.Ordinal);
+        var latestVersions = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string file in Directory.EnumerateFiles(directory, "*.yaml"))
         {
-            string workflowName = Path.GetFileNameWithoutExtension(file);
+            string rawName = Path.GetFileNameWithoutExtension(file);
+            string baseName = StripVersionSuffix(rawName);
             string yaml = File.ReadAllText(file);
-            foreach (var (k, v) in LoadFromYamlAll(yaml, workflowName))
+            foreach (var (k, v) in LoadFromYamlAll(yaml, baseName))
             {
                 definitions[k] = v;
+                if (!v.Name.StartsWith("__", StringComparison.Ordinal))
+                {
+                    if (!latestVersions.TryGetValue(v.Name, out int current) || v.Version > current)
+                    {
+                        latestVersions[v.Name] = v.Version;
+                    }
+                }
             }
         }
-        return definitions;
+        return (definitions, latestVersions);
     }
+
+    static string StripVersionSuffix(string fileName)
+        => VersionSuffixRegex().Replace(fileName, "");
 
     public static WorkflowDefinition LoadFromYaml(string yaml, string workflowName)
     {
@@ -39,7 +56,7 @@ static class WorkflowDefinitionLoader
     {
         var accumulator = new Dictionary<string, WorkflowDefinition>(StringComparer.Ordinal);
         var def = LoadFromYamlCore(yaml, workflowName, accumulator);
-        accumulator[workflowName] = def;
+        accumulator[def.VersionedName] = def;
         return accumulator;
     }
 
@@ -63,6 +80,16 @@ static class WorkflowDefinitionLoader
             ?? throw new WorkflowDefinitionException("Missing 'workflow' key.", workflowName);
 
         string? displayName = GetString(workflowNode, "name");
+
+        int version = GetInt(workflowNode, "version") ?? 1;
+        if (version < 1)
+        {
+            throw new WorkflowDefinitionException(
+                $"'workflow.version' must be a positive integer in workflow '{workflowName}'.", workflowName);
+        }
+
+        string versionedName = $"{workflowName}:{version}";
+
         var stepsRaw = GetList(workflowNode, "steps")
             ?? throw new WorkflowDefinitionException(
                 "'workflow.steps' is required and must be a sequence.", workflowName);
@@ -71,7 +98,8 @@ static class WorkflowDefinitionLoader
         {
             Name = workflowName,
             DisplayName = displayName,
-            Steps = ParseSteps(stepsRaw, workflowName, accumulator)
+            Version = version,
+            Steps = ParseSteps(stepsRaw, versionedName, accumulator)
         };
     }
 
@@ -101,6 +129,7 @@ static class WorkflowDefinitionLoader
         string? typeStr = GetString(dict, "type");
         string? activityName = GetString(dict, "activity");
         string? stepWorkflow = GetString(dict, "workflow");
+        string? stepWorkflowVersion = GetString(dict, "version");
         object? input = GetRaw(dict, "input");
         string? output = GetString(dict, "output");
         string? condition = GetString(dict, "condition");
@@ -289,6 +318,7 @@ static class WorkflowDefinitionLoader
             Type = stepType,
             ActivityName = activityName,
             WorkflowName = stepWorkflow,
+            WorkflowVersion = stepWorkflowVersion,
             Input = input,
             Output = output,
             Condition = condition,
