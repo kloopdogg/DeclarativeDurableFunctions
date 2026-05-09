@@ -5,11 +5,11 @@ using Microsoft.DurableTask;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry registry)
+sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry registry)
 {
     internal const string FunctionName = "DeclarativeWorkflowLoop";
 
-    private readonly IWorkflowDefinitionRegistryInternal _registry =
+    readonly IWorkflowDefinitionRegistryInternal registry =
         registry as IWorkflowDefinitionRegistryInternal
         ?? throw new InvalidOperationException(
             "Registry must be the framework-provided IWorkflowDefinitionRegistry implementation.");
@@ -21,27 +21,29 @@ internal sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry re
 
         // Clone all JsonElements immediately — the input buffer may be recycled across awaits.
         var parentInput = input.ParentInput.Clone();
-        var innerDef = _registry.Get(input.InnerWorkflowName);
+        var innerDef = registry.Get(input.InnerWorkflowName);
 
         var execCtx = new WorkflowExecutionContext(parentInput, context);
         foreach (var (key, value) in input.PreviousOutputs)
+        {
             execCtx.SetOutput(key, value.Clone());
+        }
 
-        await DynamicWorkflowRunner.RunAsync(context, innerDef, execCtx);
+        _ = await DynamicWorkflowRunner.RunAsync(context, innerDef, execCtx);
 
         var currentOutput = GetOutput(execCtx, input.OutputName);
 
         if (ExpressionEvaluator.EvaluateBool(input.BreakWhenExpression, execCtx))
+        {
             return currentOutput;
+        }
 
         if (input.MaxDuration != null)
         {
             var elapsed = context.CurrentUtcDateTime - input.StartedAt;
             if (elapsed >= Iso8601DurationParser.Parse(input.MaxDuration))
             {
-                if (input.OnTimeout == "fail")
-                    throw new WorkflowTimeoutException(input.InnerWorkflowName, input.MaxDuration);
-                return currentOutput;
+                return input.OnTimeout == "fail" ? throw new WorkflowTimeoutException(input.InnerWorkflowName, input.MaxDuration) : currentOutput;
             }
         }
 
@@ -51,7 +53,9 @@ internal sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry re
 
         var nextOutputs = new Dictionary<string, JsonElement>();
         foreach (var (key, value) in execCtx.Outputs)
+        {
             nextOutputs[key] = value is JsonElement je ? je : JsonSerializer.SerializeToElement(value);
+        }
 
         context.ContinueAsNew(new LoopInput
         {
@@ -70,7 +74,7 @@ internal sealed class DeclarativeLoopOrchestrator(IWorkflowDefinitionRegistry re
         return currentOutput;
     }
 
-    private static JsonElement GetOutput(WorkflowExecutionContext execCtx, string outputName)
+    static JsonElement GetOutput(WorkflowExecutionContext execCtx, string outputName)
         => execCtx.HasOutput(outputName) && execCtx.GetOutput(outputName) is JsonElement je
             ? je
             : JsonDocument.Parse("null").RootElement.Clone();

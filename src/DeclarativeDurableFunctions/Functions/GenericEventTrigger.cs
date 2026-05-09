@@ -8,8 +8,10 @@ namespace DeclarativeDurableFunctions.Functions;
 
 public class GenericEventTrigger
 {
-    [Function("EventTrigger")]
-    public async Task<HttpResponseData> EventTriggerAsync(
+    internal const string FunctionName = "EventTrigger";
+
+    [Function(FunctionName)]
+    public static async Task<HttpResponseData> EventTriggerAsync(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "events/{instanceId}/{eventName}")] HttpRequestData req,
         string instanceId,
         string eventName,

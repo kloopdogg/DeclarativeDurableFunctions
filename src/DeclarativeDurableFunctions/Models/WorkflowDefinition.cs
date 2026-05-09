@@ -1,6 +1,6 @@
 namespace DeclarativeDurableFunctions.Models;
 
-internal sealed class WorkflowDefinition
+sealed class WorkflowDefinition
 {
     public string Name { get; init; } = string.Empty;
     public string? DisplayName { get; init; }

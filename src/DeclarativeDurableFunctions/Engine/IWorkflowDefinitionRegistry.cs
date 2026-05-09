@@ -12,7 +12,7 @@ public interface IWorkflowDefinitionRegistry
 }
 
 // Internal extension used by the engine — consumers never see WorkflowDefinition directly.
-internal interface IWorkflowDefinitionRegistryInternal : IWorkflowDefinitionRegistry
+interface IWorkflowDefinitionRegistryInternal : IWorkflowDefinitionRegistry
 {
     WorkflowDefinition Get(string workflowName);
     bool TryGet(string workflowName, out WorkflowDefinition? definition);

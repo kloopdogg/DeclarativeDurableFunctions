@@ -12,20 +12,24 @@ public static class OrchestrationContextExtensions
         IWorkflowDefinitionRegistry registry)
     {
         if (registry is not IWorkflowDefinitionRegistryInternal internalRegistry)
+        {
             throw new InvalidOperationException(
                 "Registry must be the framework-provided IWorkflowDefinitionRegistry implementation.");
+        }
 
         var workflowName = context.Name;
         if (!internalRegistry.TryGet(workflowName, out var definition) || definition is null)
+        {
             throw new WorkflowDefinitionException(
                 $"No workflow definition registered for orchestration '{workflowName}'.", workflowName);
+        }
 
         var input = ResolveInput(context);
         var execCtx = new WorkflowExecutionContext(input, context);
         return WorkflowRunner.RunAsync(context, definition, execCtx);
     }
 
-    private static JsonElement ResolveInput(TaskOrchestrationContext context)
+    static JsonElement ResolveInput(TaskOrchestrationContext context)
     {
         try
         {

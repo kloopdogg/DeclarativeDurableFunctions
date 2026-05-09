@@ -7,7 +7,7 @@ namespace DeclarativeDurableFunctions.TestApp.Functions.Activities;
 public class SendConfirmationEmailActivity(ILogger<SendConfirmationEmailActivity> logger)
 {
     [Function("SendConfirmationEmailActivity")]
-    public object RunAsync([ActivityTrigger] SendEmailRequest sendEmailRequest, FunctionContext context)
+    public object RunAsync([ActivityTrigger] SendEmailRequest sendEmailRequest)
     {
         logger.LogWarning("Sending confirmation email to: '{EmailToAddress}' with subject: '{EmailSubject}'", sendEmailRequest.CustomerEmail, sendEmailRequest.Subject);
 

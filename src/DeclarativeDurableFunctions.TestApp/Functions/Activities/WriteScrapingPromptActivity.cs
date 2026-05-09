@@ -11,7 +11,7 @@ public class WriteScrapingPromptActivity
         [ActivityTrigger] JsonElement input,
         FunctionContext context)
     {
-        ILogger logger = context.GetLogger(nameof(WriteScrapingPromptActivity));
+        var logger = context.GetLogger(nameof(WriteScrapingPromptActivity));
         string siteUrl = input.GetProperty("siteUrl").GetString()!;
         string prompt = input.GetProperty("prompt").GetString()!;
  

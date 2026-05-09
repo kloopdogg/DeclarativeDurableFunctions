@@ -3,7 +3,7 @@ using Microsoft.DurableTask;
 
 namespace DeclarativeDurableFunctions.Models;
 
-internal sealed class AppRetryPolicy
+sealed class AppRetryPolicy
 {
     public int MaxAttempts { get; init; }
     public string FirstRetryInterval { get; init; } = "PT1S";

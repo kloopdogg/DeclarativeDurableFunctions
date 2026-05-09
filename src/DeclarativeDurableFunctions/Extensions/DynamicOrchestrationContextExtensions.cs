@@ -20,8 +20,10 @@ public static class DynamicOrchestrationContextExtensions
         IWorkflowDefinitionRegistry registry)
     {
         if (registry is not IWorkflowDefinitionRegistryInternal internalRegistry)
+        {
             throw new InvalidOperationException(
                 "Registry must be the framework-provided IWorkflowDefinitionRegistry implementation.");
+        }
 
         var rawInput = ResolveInput(context);
         string workflowName;
@@ -43,14 +45,16 @@ public static class DynamicOrchestrationContextExtensions
         }
 
         if (!internalRegistry.TryGet(workflowName, out var definition) || definition is null)
+        {
             throw new WorkflowDefinitionException(
                 $"No workflow definition registered for orchestration '{workflowName}'.", workflowName);
+        }
 
         var execCtx = new WorkflowExecutionContext(actualInput, context);
         return DynamicWorkflowRunner.RunAsync(context, definition, execCtx);
     }
 
-    private static JsonElement ResolveInput(TaskOrchestrationContext context)
+    static JsonElement ResolveInput(TaskOrchestrationContext context)
     {
         try { return context.GetInput<JsonElement>(); }
         catch { return JsonDocument.Parse("null").RootElement; }

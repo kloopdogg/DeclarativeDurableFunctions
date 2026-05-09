@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal sealed class LoopInput
+sealed class LoopInput
 {
     public string InnerWorkflowName { get; init; } = string.Empty;
     public string OutputName { get; init; } = string.Empty;

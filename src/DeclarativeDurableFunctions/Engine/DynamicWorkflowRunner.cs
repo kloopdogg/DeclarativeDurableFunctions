@@ -11,7 +11,7 @@ namespace DeclarativeDurableFunctions.Engine;
 /// single GenericSubOrchestration function, with the workflow name passed in the input envelope.
 /// Use via context.RunWorkflowDynamicAsync(registry) — no named stub per workflow required.
 /// </summary>
-internal static class DynamicWorkflowRunner
+static class DynamicWorkflowRunner
 {
     public static async Task<JsonElement> RunAsync(
         TaskOrchestrationContext context,
@@ -22,24 +22,29 @@ internal static class DynamicWorkflowRunner
         return JsonSerializer.SerializeToElement(execCtx.Outputs);
     }
 
-    private static async Task ExecuteSteps(
+    static async Task ExecuteSteps(
         TaskOrchestrationContext context,
         IReadOnlyList<StepDefinition> steps,
         WorkflowExecutionContext execCtx)
     {
         foreach (var step in steps)
+        {
             await ExecuteStep(context, step, execCtx);
+        }
     }
 
-    private static async Task ExecuteStep(
+    static async Task ExecuteStep(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
         if (step.Condition != null && !ExpressionEvaluator.EvaluateBool(step.Condition, execCtx))
+        {
             return;
+        }
 
+#pragma warning disable IDE0010 // Add missing cases
         switch (step.Type)
         {
             case StepType.Activity:         await RunActivity(context, step, execCtx, outputNameOverride); break;
@@ -52,62 +57,64 @@ internal static class DynamicWorkflowRunner
             case StepType.TriggerAndWait:   await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
             case StepType.Loop:             await RunLoop(context, step, execCtx, outputNameOverride); break;
         }
+#pragma warning restore IDE0010 // Add missing cases
     }
 
     // ---- Activity ----
 
-    private static async Task RunActivity(
+    static async Task RunActivity(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
         var options = BuildActivityOptions(step);
         var result = await context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput, options);
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
+        {
             execCtx.SetOutput(effectiveOutput, result);
+        }
     }
 
-    private static TaskOptions? BuildActivityOptions(StepDefinition step)
+    static TaskOptions? BuildActivityOptions(StepDefinition step)
         => step.Retry != null
             ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy())
             : null;
 
     // ---- SubOrchestration (routes through GenericSubOrchestration) ----
 
-    private static async Task RunSubOrchestration(
+    static async Task RunSubOrchestration(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
-        var instanceId = BuildInstanceId(context, step, execCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+        string instanceId = BuildInstanceId(context, step, execCtx);
         var options = BuildSubOrchOptions(step, instanceId);
         var result = await context.CallSubOrchestratorAsync<JsonElement>(
             DynamicOrchestrationContextExtensions.GenericSubOrchestrationFunctionName,
             WrapSubOrchInput(step.WorkflowName!, resolvedInput),
             options);
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
+        {
             execCtx.SetOutput(effectiveOutput, result);
+        }
     }
 
-    private static SubOrchestrationOptions BuildSubOrchOptions(StepDefinition step, string instanceId)
-    {
-        if (step.Retry != null)
-            return TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()).WithInstanceId(instanceId);
-        return new SubOrchestrationOptions(retry: null, instanceId: instanceId);
-    }
+    static SubOrchestrationOptions BuildSubOrchOptions(StepDefinition step, string instanceId) => step.Retry != null
+            ? TaskOptions.FromRetryPolicy(step.Retry.ToSdkRetryPolicy()).WithInstanceId(instanceId)
+            : new SubOrchestrationOptions(retry: null, instanceId: instanceId);
 
-    private static string BuildInstanceId(
+    static string BuildInstanceId(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx)
     {
-        var suffix = step.InstanceId != null
+        string suffix = step.InstanceId != null
             ? ExpressionEvaluator.Stringify(ExpressionEvaluator.Evaluate(step.InstanceId, execCtx))
             : context.NewGuid().ToString();
         return $"{context.InstanceId}:{step.Name}:{suffix}";
@@ -115,20 +122,22 @@ internal static class DynamicWorkflowRunner
 
     // ---- Foreach ----
 
-    private static async Task RunForeach(
+    static async Task RunForeach(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        var sourceVal = step.Source != null ? ExpressionEvaluator.Evaluate(step.Source, execCtx) : null;
+        object? sourceVal = step.Source != null ? ExpressionEvaluator.Evaluate(step.Source, execCtx) : null;
         if (sourceVal is not JsonElement arr || arr.ValueKind != JsonValueKind.Array)
+        {
             throw new WorkflowDefinitionException(
                 $"foreach step '{step.Name}' source did not resolve to a JSON array.");
+        }
 
         var items = arr.EnumerateArray().ToList();
         var tasks = new Task<JsonElement>[items.Count];
-        for (var i = 0; i < items.Count; i++)
+        for (int i = 0; i < items.Count; i++)
         {
             var iterCtx = execCtx.CreateIterationScope(items[i], i);
             tasks[i] = step.WorkflowName != null
@@ -137,27 +146,29 @@ internal static class DynamicWorkflowRunner
         }
 
         var results = await Task.WhenAll(tasks);
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
+        {
             execCtx.SetOutput(effectiveOutput, JsonSerializer.SerializeToElement(results));
+        }
     }
 
-    private static Task<JsonElement> DispatchForeachActivity(
+    static Task<JsonElement> DispatchForeachActivity(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext iterCtx)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
         return context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput, BuildActivityOptions(step));
     }
 
-    private static Task<JsonElement> DispatchForeachSubOrch(
+    static Task<JsonElement> DispatchForeachSubOrch(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext iterCtx)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
-        var instanceId = BuildInstanceId(context, step, iterCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, iterCtx);
+        string instanceId = BuildInstanceId(context, step, iterCtx);
         return context.CallSubOrchestratorAsync<JsonElement>(
             DynamicOrchestrationContextExtensions.GenericSubOrchestrationFunctionName,
             WrapSubOrchInput(step.WorkflowName!, resolvedInput),
@@ -166,7 +177,7 @@ internal static class DynamicWorkflowRunner
 
     // ---- Parallel ----
 
-    private static async Task RunParallel(
+    static async Task RunParallel(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
@@ -178,17 +189,19 @@ internal static class DynamicWorkflowRunner
             .ToArray();
         await Task.WhenAll(tasks);
 
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
         {
             var aggregate = new Dictionary<string, object?>();
-            for (var i = 0; i < step.Steps.Count; i++)
+            for (int i = 0; i < step.Steps.Count; i++)
             {
                 var child = step.Steps[i];
                 if (child.Name != null)
+                {
                     aggregate[child.Name] = branchScopes[i].HasOutput(child.Name)
                         ? branchScopes[i].GetOutput(child.Name)
                         : null;
+                }
             }
             execCtx.SetOutput(effectiveOutput, JsonSerializer.SerializeToElement(aggregate));
         }
@@ -196,7 +209,7 @@ internal static class DynamicWorkflowRunner
 
     // ---- WaitForEvent ----
 
-    private static async Task RunWaitForEvent(
+    static async Task RunWaitForEvent(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
@@ -207,9 +220,12 @@ internal static class DynamicWorkflowRunner
         if (string.IsNullOrEmpty(step.Timeout))
         {
             var payload = await eventTask;
-            var effectiveOutput = outputNameOverride ?? step.Output;
+            string? effectiveOutput = outputNameOverride ?? step.Output;
             if (effectiveOutput != null)
+            {
                 execCtx.SetOutput(effectiveOutput, payload);
+            }
+
             return;
         }
 
@@ -222,29 +238,36 @@ internal static class DynamicWorkflowRunner
         {
             cts.Cancel();
             var payload = await eventTask;
-            var effectiveOutput = outputNameOverride ?? step.Output;
+            string? effectiveOutput = outputNameOverride ?? step.Output;
             if (effectiveOutput != null)
+            {
                 execCtx.SetOutput(effectiveOutput, payload);
+            }
+
             return;
         }
 
         if (step.OnTimeout == "fail")
+        {
             throw new WorkflowTimeoutException(step.Name ?? "(unnamed)", step.Timeout);
+        }
 
-        var effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
+        string? effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
         if (effectiveOutputOnTimeout != null)
+        {
             execCtx.SetOutput(effectiveOutputOnTimeout, null);
+        }
     }
 
     // ---- TriggerAndWait ----
 
-    private static async Task RunTriggerAndWait(
+    static async Task RunTriggerAndWait(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
 
         // Register the event listener BEFORE calling the activity — see spec §5.11.
         // This prevents a race where a fast downstream system raises the callback event
@@ -254,11 +277,14 @@ internal static class DynamicWorkflowRunner
         if (string.IsNullOrEmpty(step.Timeout))
         {
             // No timeout: fire the trigger, then await the event indefinitely.
-            await context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput);
+            _ = await context.CallActivityAsync<JsonElement>(step.ActivityName!, resolvedInput);
             var payload = await eventTask;
-            var effectiveOutput = outputNameOverride ?? step.Output;
+            string? effectiveOutput = outputNameOverride ?? step.Output;
             if (effectiveOutput != null)
+            {
                 execCtx.SetOutput(effectiveOutput, payload);
+            }
+
             return;
         }
 
@@ -276,29 +302,36 @@ internal static class DynamicWorkflowRunner
         {
             cts.Cancel();
             var payload = await eventTask;
-            var effectiveOutput = outputNameOverride ?? step.Output;
+            string? effectiveOutput = outputNameOverride ?? step.Output;
             if (effectiveOutput != null)
+            {
                 execCtx.SetOutput(effectiveOutput, payload);
+            }
+
             return;
         }
 
         if (step.OnTimeout == "fail")
+        {
             throw new WorkflowTimeoutException(step.Name ?? "(unnamed)", step.Timeout);
+        }
 
-        var effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
+        string? effectiveOutputOnTimeout = outputNameOverride ?? step.Output;
         if (effectiveOutputOnTimeout != null)
+        {
             execCtx.SetOutput(effectiveOutputOnTimeout, null);
+        }
     }
 
     // ---- Poll ----
 
-    private static async Task RunPoll(
+    static async Task RunPoll(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         string? outputNameOverride = null)
     {
-        var resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
+        object? resolvedInput = ExpressionEvaluator.ResolveInputTemplate(step.Input, execCtx);
         var activityInputJson = JsonSerializer.SerializeToElement(resolvedInput);
 
         var pollerInput = new PollerInput
@@ -313,36 +346,42 @@ internal static class DynamicWorkflowRunner
             StartedAt       = context.CurrentUtcDateTime
         };
 
-        var instanceId = $"{context.InstanceId}:{step.Name ?? step.ActivityName}:poller";
+        string instanceId = $"{context.InstanceId}:{step.Name ?? step.ActivityName}:poller";
         var options = new SubOrchestrationOptions(retry: null, instanceId: instanceId);
         var result = await context.CallSubOrchestratorAsync<JsonElement>(
             DeclarativePollerOrchestrator.FunctionName, pollerInput, options);
 
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
+        {
             execCtx.SetOutput(effectiveOutput, result);
+        }
     }
 
     // ---- Switch ----
 
-    private static async Task RunSwitch(
+    static async Task RunSwitch(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx)
     {
-        var onValue = ExpressionEvaluator.Evaluate(step.SwitchOn!, execCtx);
-        var key = ExpressionEvaluator.Stringify(onValue);
+        object? onValue = ExpressionEvaluator.Evaluate(step.SwitchOn!, execCtx);
+        string key = ExpressionEvaluator.Stringify(onValue);
 
         if (!step.Cases.TryGetValue(key, out var caseSteps))
-            step.Cases.TryGetValue("default", out caseSteps);
+        {
+            _ = step.Cases.TryGetValue("default", out caseSteps);
+        }
 
         if (caseSteps != null)
+        {
             await ExecuteSteps(context, caseSteps, execCtx);
+        }
     }
 
     // ---- Loop ----
 
-    private static async Task RunLoop(
+    static async Task RunLoop(
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
@@ -361,12 +400,12 @@ internal static class DynamicWorkflowRunner
             ParentInput        = execCtx.Input
         };
 
-        var instanceId = $"{context.InstanceId}:{step.Name}:loop";
+        string instanceId = $"{context.InstanceId}:{step.Name}:loop";
         var options = new SubOrchestrationOptions(retry: null, instanceId: instanceId);
         var result = await context.CallSubOrchestratorAsync<JsonElement>(
             DeclarativeLoopOrchestrator.FunctionName, loopInput, options);
 
-        var effectiveOutput = outputNameOverride ?? step.Output;
+        string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
         {
             object? outputValue = result.ValueKind == JsonValueKind.Null ? null : result;
@@ -376,7 +415,7 @@ internal static class DynamicWorkflowRunner
 
     // ---- Helpers ----
 
-    private static Dictionary<string, object?> WrapSubOrchInput(string workflowName, object? input)
+    static Dictionary<string, object?> WrapSubOrchInput(string workflowName, object? input)
         => new() { ["__workflow"] = workflowName, ["__input"] = input };
 
 }

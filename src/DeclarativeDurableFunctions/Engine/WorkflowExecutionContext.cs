@@ -3,21 +3,21 @@ using System.Text.Json;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal sealed class WorkflowExecutionContext
+sealed class WorkflowExecutionContext
 {
-    private readonly Dictionary<string, object?> _outputs;
+    readonly Dictionary<string, object?> outputs;
 
     public WorkflowExecutionContext(JsonElement input, TaskOrchestrationContext orchestrationContext)
     {
         Input = input;
         InstanceId = orchestrationContext.InstanceId;
         ParentInstanceId = orchestrationContext.Parent?.InstanceId;
-        _outputs = new Dictionary<string, object?>(StringComparer.Ordinal);
+        outputs = new Dictionary<string, object?>(StringComparer.Ordinal);
         IterationItem = null;
         IterationIndex = null;
     }
 
-    private WorkflowExecutionContext(
+    WorkflowExecutionContext(
         JsonElement input,
         string instanceId,
         string? parentInstanceId,
@@ -28,12 +28,12 @@ internal sealed class WorkflowExecutionContext
         Input = input;
         InstanceId = instanceId;
         ParentInstanceId = parentInstanceId;
-        _outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
+        this.outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
         IterationItem = iterationItem;
         IterationIndex = iterationIndex;
     }
 
-    private WorkflowExecutionContext(
+    WorkflowExecutionContext(
         JsonElement input,
         string instanceId,
         string? parentInstanceId,
@@ -42,7 +42,7 @@ internal sealed class WorkflowExecutionContext
         Input = input;
         InstanceId = instanceId;
         ParentInstanceId = parentInstanceId;
-        _outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
+        this.outputs = new Dictionary<string, object?>(outputs, StringComparer.Ordinal);
         IterationItem = null;
         IterationIndex = null;
     }
@@ -54,23 +54,17 @@ internal sealed class WorkflowExecutionContext
     public JsonElement? IterationItem { get; }
     public int? IterationIndex { get; }
 
-    public void SetOutput(string name, object? value)
-    {
-        if (value is JsonElement element)
-            _outputs[name] = element.Clone();
-        else
-            _outputs[name] = value;
-    }
+    public void SetOutput(string name, object? value) => outputs[name] = value is JsonElement element ? element.Clone() : value;
 
-    public object? GetOutput(string name) => _outputs[name];
+    public object? GetOutput(string name) => outputs[name];
 
-    public bool HasOutput(string name) => _outputs.ContainsKey(name);
+    public bool HasOutput(string name) => outputs.ContainsKey(name);
 
-    public IReadOnlyDictionary<string, object?> Outputs => _outputs;
+    public IReadOnlyDictionary<string, object?> Outputs => outputs;
 
     public WorkflowExecutionContext CreateIterationScope(JsonElement item, int index)
-        => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs, item, index);
+        => new(Input, InstanceId, ParentInstanceId, outputs, item, index);
 
     public WorkflowExecutionContext CreateParallelBranchScope()
-        => new WorkflowExecutionContext(Input, InstanceId, ParentInstanceId, _outputs);
+        => new(Input, InstanceId, ParentInstanceId, outputs);
 }

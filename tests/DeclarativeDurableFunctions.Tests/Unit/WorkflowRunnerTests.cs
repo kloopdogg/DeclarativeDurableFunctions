@@ -12,7 +12,7 @@ public class WorkflowRunnerTests
 {
     // ---- Helpers ----
 
-    private static (TaskOrchestrationContext context, WorkflowExecutionContext execCtx) MakeContext(
+    static (TaskOrchestrationContext context, WorkflowExecutionContext execCtx) MakeContext(
         string inputJson = "{}",
         string instanceId = "test-instance",
         string? parentInstanceId = null)
@@ -30,10 +30,11 @@ public class WorkflowRunnerTests
         return (context, execCtx);
     }
 
-    private static WorkflowDefinition MakeDef(params StepDefinition[] steps)
-        => new WorkflowDefinition { Name = "TestWorkflow", Steps = steps };
+    static WorkflowDefinition MakeDef(params StepDefinition[] steps)
+        => new()
+        { Name = "TestWorkflow", Steps = steps };
 
-    private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement;
+    static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement;
 
     // ---- Activity ----
 
@@ -61,7 +62,7 @@ public class WorkflowRunnerTests
     {
         var (context, execCtx) = MakeContext();
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"value":42}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"value":42}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -167,7 +168,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Foreach_Activity_InvokesActivityForEachItem()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"items":[1,2,3]}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"items":[1,2,3]}""");
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
             .Returns(Task.FromResult(Json("{}")));
 
@@ -188,9 +189,9 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Foreach_Activity_StoresResultsAsArray()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"items":[1,2]}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"items":[1,2]}""");
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"done":true}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"done":true}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -215,10 +216,10 @@ public class WorkflowRunnerTests
         var (context, execCtx) = MakeContext();
         context.CallActivityAsync<JsonElement>(
                 Arg.Is<TaskName>(n => n.Name == "ActivityA"), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"label":"a"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"label":"a"}""")));
         context.CallActivityAsync<JsonElement>(
                 Arg.Is<TaskName>(n => n.Name == "ActivityB"), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"label":"b"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"label":"b"}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -266,13 +267,13 @@ public class WorkflowRunnerTests
     {
         // Arrange: parent context has "BranchA" pre-set to a sentinel before the block runs.
         var (context, execCtx) = MakeContext();
-        var parentSnapshot = Json("""{"sentinel":"parent"}""");
+        var parentSnapshot = Json(/*lang=json,strict*/ """{"sentinel":"parent"}""");
         execCtx.SetOutput("BranchA", parentSnapshot);
 
         // Branch A's activity returns a DIFFERENT value — this goes into branchScopes[0] under "BranchA".
         context.CallActivityAsync<JsonElement>(
                 Arg.Is<TaskName>(n => n.Name == "ActivityA"), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"sentinel":"from-branch-a"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"sentinel":"from-branch-a"}""")));
 
         // Branch B's input is "{{BranchA}}" — capture what the runner actually resolves for it.
         object? capturedInput = null;
@@ -298,17 +299,17 @@ public class WorkflowRunnerTests
 
         // Branch B must see the parent's frozen snapshot ("parent"), not what Branch A wrote ("from-branch-a").
         Assert.NotNull(capturedInput);
-        var resolved = (JsonElement)capturedInput!;
+        var resolved = (JsonElement)capturedInput;
         Assert.Equal("parent", resolved.GetProperty("sentinel").GetString());
     }
 
     [Fact]
     public async Task Parallel_ConditionFalseBranch_NullInAggregate()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"runB":false}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"runB":false}""");
         context.CallActivityAsync<JsonElement>(
                 Arg.Is<TaskName>(n => n.Name == "ActivityA"), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"label":"a"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"label":"a"}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -365,7 +366,7 @@ public class WorkflowRunnerTests
     public async Task WaitForEvent_WithoutTimeout_EventReceived_StoresPayload()
     {
         var (context, execCtx) = MakeContext();
-        var payload = Json("""{"approved":true}""");
+        var payload = Json(/*lang=json,strict*/ """{"approved":true}""");
         context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(payload));
 
@@ -386,7 +387,7 @@ public class WorkflowRunnerTests
     public async Task WaitForEvent_WithTimeout_EventReceived_StoresPayload()
     {
         var (context, execCtx) = MakeContext();
-        var payload = Json("""{"approved":true}""");
+        var payload = Json(/*lang=json,strict*/ """{"approved":true}""");
         context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(payload));
         context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -456,7 +457,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Switch_MatchingCase_ExecutesCaseSteps()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"region":"EU"}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"region":"EU"}""");
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
             .Returns(Task.FromResult(Json("{}")));
 
@@ -483,7 +484,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Switch_NoMatch_ExecutesDefaultCase()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"region":"APAC"}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"region":"APAC"}""");
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
             .Returns(Task.FromResult(Json("{}")));
 
@@ -510,7 +511,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Switch_NoMatchNoDefault_ContinuesSilently()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"region":"APAC"}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"region":"APAC"}""");
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -538,7 +539,7 @@ public class WorkflowRunnerTests
             .Returns(callInfo =>
             {
                 capturedName = callInfo.ArgAt<TaskName>(0);
-                return Task.FromResult(Json("""{"status":"Complete"}"""));
+                return Task.FromResult(Json(/*lang=json,strict*/ """{"status":"Complete"}"""));
             });
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
@@ -563,7 +564,7 @@ public class WorkflowRunnerTests
             .Returns(callInfo =>
             {
                 captured = callInfo[1] as PollerInput;
-                return Task.FromResult(Json("""{"status":"Complete"}"""));
+                return Task.FromResult(Json(/*lang=json,strict*/ """{"status":"Complete"}"""));
             });
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
@@ -579,7 +580,7 @@ public class WorkflowRunnerTests
         }), execCtx);
 
         Assert.NotNull(captured);
-        Assert.Equal("CheckStatusActivity", captured!.ActivityName);
+        Assert.Equal("CheckStatusActivity", captured.ActivityName);
         Assert.Equal("statusResult", captured.OutputName);
         Assert.Equal("{{statusResult.status == 'Complete'}}", captured.UntilExpression);
         Assert.Equal("PT100M", captured.Delay);
@@ -590,7 +591,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Poll_InputResolvedFromParentContext()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"correlationId":"abc123"}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"correlationId":"abc123"}""");
         PollerInput? captured = null;
         context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
             .Returns(callInfo =>
@@ -611,8 +612,8 @@ public class WorkflowRunnerTests
         }), execCtx);
 
         Assert.NotNull(captured);
-        Assert.NotNull(captured!.ActivityInput);
-        Assert.Equal("abc123", captured.ActivityInput!.Value.GetString());
+        Assert.NotNull(captured.ActivityInput);
+        Assert.Equal("abc123", captured.ActivityInput.Value.GetString());
     }
 
     [Fact]
@@ -646,7 +647,7 @@ public class WorkflowRunnerTests
     {
         var (context, execCtx) = MakeContext();
         context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"status":"Complete"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"status":"Complete"}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -729,7 +730,7 @@ public class WorkflowRunnerTests
     [Fact]
     public async Task Condition_True_ExecutesStep()
     {
-        var (context, execCtx) = MakeContext(inputJson: """{"approved":true}""");
+        var (context, execCtx) = MakeContext(inputJson: /*lang=json,strict*/ """{"approved":true}""");
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
             .Returns(Task.FromResult(Json("{}")));
 
@@ -752,7 +753,7 @@ public class WorkflowRunnerTests
     public async Task TriggerAndWait_NoTimeout_EventPayload_StoredUnderOutput()
     {
         var (context, execCtx) = MakeContext();
-        var payload = Json("""{"status":"complete"}""");
+        var payload = Json(/*lang=json,strict*/ """{"status":"complete"}""");
         context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(payload));
         context.CallActivityAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
@@ -811,7 +812,7 @@ public class WorkflowRunnerTests
     public async Task TriggerAndWait_WithTimeout_EventWins_StoresPayload()
     {
         var (context, execCtx) = MakeContext();
-        var payload = Json("""{"status":"complete"}""");
+        var payload = Json(/*lang=json,strict*/ """{"status":"complete"}""");
         context.WaitForExternalEvent<JsonElement>(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(payload));
         context.CreateTimer(Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -952,7 +953,7 @@ public class WorkflowRunnerTests
     {
         var (context, execCtx) = MakeContext(instanceId: "parent-instance");
         context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"status":"success"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"status":"success"}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {
@@ -980,7 +981,7 @@ public class WorkflowRunnerTests
             .Returns(callInfo =>
             {
                 capturedOpts = callInfo[2] as SubOrchestrationOptions;
-                return Task.FromResult(Json("""{"status":"success"}"""));
+                return Task.FromResult(Json(/*lang=json,strict*/ """{"status":"success"}"""));
             });
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
@@ -997,12 +998,12 @@ public class WorkflowRunnerTests
         Assert.Equal("parent-instance:RetryUntilDone:loop", capturedOpts.InstanceId);
     }
 
-    [Fact]
+    [Fact] 
     public async Task Loop_StoresResult_UnderOutputName()
     {
         var (context, execCtx) = MakeContext();
         context.CallSubOrchestratorAsync<JsonElement>(Arg.Any<TaskName>(), Arg.Any<object?>(), Arg.Any<TaskOptions?>())
-            .Returns(Task.FromResult(Json("""{"status":"success","data":"found"}""")));
+            .Returns(Task.FromResult(Json(/*lang=json,strict*/ """{"status":"success","data":"found"}""")));
 
         await WorkflowRunner.RunAsync(context, MakeDef(new StepDefinition
         {

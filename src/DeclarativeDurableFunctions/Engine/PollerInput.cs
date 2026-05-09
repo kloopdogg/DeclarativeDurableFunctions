@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace DeclarativeDurableFunctions.Engine;
 
-internal sealed class PollerInput
+sealed class PollerInput
 {
     public string ActivityName { get; init; } = string.Empty;
     public JsonElement? ActivityInput { get; init; }
