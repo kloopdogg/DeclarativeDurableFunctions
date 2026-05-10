@@ -3,6 +3,7 @@ using DeclarativeDurableFunctions.Exceptions;
 using DeclarativeDurableFunctions.Extensions;
 using DeclarativeDurableFunctions.Models;
 using Microsoft.DurableTask;
+using Microsoft.Extensions.Logging;
 
 namespace DeclarativeDurableFunctions.Engine;
 
@@ -19,7 +20,15 @@ static class DynamicWorkflowRunner
         WorkflowExecutionContext execCtx,
         IWorkflowDefinitionRegistryInternal registry)
     {
-        await ExecuteSteps(context, definition.Steps, execCtx, registry);
+        var logger = context.CreateReplaySafeLogger(nameof(DynamicWorkflowRunner));
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            ["OrchestrationInstanceId"] = context.InstanceId,
+            ["WorkflowName"] = definition.Name
+        }))
+        {
+            await ExecuteSteps(context, definition.Steps, execCtx, registry, logger);
+        }
         return JsonSerializer.SerializeToElement(execCtx.Outputs);
     }
 
@@ -27,11 +36,12 @@ static class DynamicWorkflowRunner
         TaskOrchestrationContext context,
         IReadOnlyList<StepDefinition> steps,
         WorkflowExecutionContext execCtx,
-        IWorkflowDefinitionRegistryInternal registry)
+        IWorkflowDefinitionRegistryInternal registry,
+        ILogger logger)
     {
         foreach (var step in steps)
         {
-            await ExecuteStep(context, step, execCtx, registry);
+            await ExecuteStep(context, step, execCtx, registry, null, logger);
         }
     }
 
@@ -40,27 +50,35 @@ static class DynamicWorkflowRunner
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         IWorkflowDefinitionRegistryInternal registry,
-        string? outputNameOverride = null)
+        string? outputNameOverride,
+        ILogger logger)
     {
         if (step.Condition != null && !ExpressionEvaluator.EvaluateBool(step.Condition, execCtx))
         {
             return;
         }
 
-#pragma warning disable IDE0010 // Add missing cases
-        switch (step.Type)
+        using (logger.BeginScope(new Dictionary<string, object?>
         {
-            case StepType.Activity:         await RunActivity(context, step, execCtx, outputNameOverride); break;
-            case StepType.SubOrchestration: await RunSubOrchestration(context, step, execCtx, registry, outputNameOverride); break;
-            case StepType.Foreach:          await RunForeach(context, step, execCtx, registry, outputNameOverride); break;
-            case StepType.Parallel:         await RunParallel(context, step, execCtx, registry, outputNameOverride); break;
-            case StepType.WaitForEvent:     await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
-            case StepType.Switch:           await RunSwitch(context, step, execCtx, registry); break;
-            case StepType.Poll:             await RunPoll(context, step, execCtx, outputNameOverride); break;
-            case StepType.TriggerAndWait:   await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
-            case StepType.Loop:             await RunLoop(context, step, execCtx, outputNameOverride); break;
-        }
+            ["StepName"] = step.Name,
+            ["StepType"] = step.Type.ToString()
+        }))
+        {
+#pragma warning disable IDE0010 // Add missing cases
+            switch (step.Type)
+            {
+                case StepType.Activity:         await RunActivity(context, step, execCtx, outputNameOverride); break;
+                case StepType.SubOrchestration: await RunSubOrchestration(context, step, execCtx, registry, outputNameOverride); break;
+                case StepType.Foreach:          await RunForeach(context, step, execCtx, registry, outputNameOverride); break;
+                case StepType.Parallel:         await RunParallel(context, step, execCtx, registry, logger, outputNameOverride); break;
+                case StepType.WaitForEvent:     await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
+                case StepType.Switch:           await RunSwitch(context, step, execCtx, registry, logger); break;
+                case StepType.Poll:             await RunPoll(context, step, execCtx, outputNameOverride); break;
+                case StepType.TriggerAndWait:   await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
+                case StepType.Loop:             await RunLoop(context, step, execCtx, outputNameOverride); break;
+            }
 #pragma warning restore IDE0010 // Add missing cases
+        }
     }
 
     // ---- Activity ----
@@ -194,11 +212,12 @@ static class DynamicWorkflowRunner
         StepDefinition step,
         WorkflowExecutionContext execCtx,
         IWorkflowDefinitionRegistryInternal registry,
+        ILogger logger,
         string? outputNameOverride = null)
     {
         var branchScopes = step.Steps.Select(_ => execCtx.CreateParallelBranchScope()).ToList();
         var tasks = step.Steps
-            .Select((child, i) => ExecuteStep(context, child, branchScopes[i], registry, outputNameOverride: child.Name))
+            .Select((child, i) => ExecuteStep(context, child, branchScopes[i], registry, child.Name, logger))
             .ToArray();
         await Task.WhenAll(tasks);
 
@@ -367,7 +386,8 @@ static class DynamicWorkflowRunner
         string? effectiveOutput = outputNameOverride ?? step.Output;
         if (effectiveOutput != null)
         {
-            execCtx.SetOutput(effectiveOutput, result);
+            object? outputValue = result.ValueKind == JsonValueKind.Null ? null : result;
+            execCtx.SetOutput(effectiveOutput, outputValue);
         }
     }
 
@@ -377,7 +397,8 @@ static class DynamicWorkflowRunner
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
-        IWorkflowDefinitionRegistryInternal registry)
+        IWorkflowDefinitionRegistryInternal registry,
+        ILogger logger)
     {
         object? onValue = ExpressionEvaluator.Evaluate(step.SwitchOn!, execCtx);
         string key = ExpressionEvaluator.Stringify(onValue);
@@ -389,7 +410,7 @@ static class DynamicWorkflowRunner
 
         if (caseSteps != null)
         {
-            await ExecuteSteps(context, caseSteps, execCtx, registry);
+            await ExecuteSteps(context, caseSteps, execCtx, registry, logger);
         }
     }
 

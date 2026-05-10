@@ -2,6 +2,7 @@ using System.Text.Json;
 using DeclarativeDurableFunctions.Exceptions;
 using DeclarativeDurableFunctions.Models;
 using Microsoft.DurableTask;
+using Microsoft.Extensions.Logging;
 
 namespace DeclarativeDurableFunctions.Engine;
 
@@ -12,18 +13,27 @@ static class WorkflowRunner
         WorkflowDefinition definition,
         WorkflowExecutionContext execCtx)
     {
-        await ExecuteSteps(context, definition.Steps, execCtx);
+        var logger = context.CreateReplaySafeLogger(nameof(WorkflowRunner));
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            ["OrchestrationInstanceId"] = context.InstanceId,
+            ["WorkflowName"] = definition.Name
+        }))
+        {
+            await ExecuteSteps(context, definition.Steps, execCtx, logger);
+        }
         return JsonSerializer.SerializeToElement(execCtx.Outputs);
     }
 
     static async Task ExecuteSteps(
         TaskOrchestrationContext context,
         IReadOnlyList<StepDefinition> steps,
-        WorkflowExecutionContext execCtx)
+        WorkflowExecutionContext execCtx,
+        ILogger logger)
     {
         foreach (var step in steps)
         {
-            await ExecuteStep(context, step, execCtx);
+            await ExecuteStep(context, step, execCtx, null, logger);
         }
     }
 
@@ -33,27 +43,35 @@ static class WorkflowRunner
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
-        string? outputNameOverride = null)
+        string? outputNameOverride,
+        ILogger logger)
     {
         if (step.Condition != null && !ExpressionEvaluator.EvaluateBool(step.Condition, execCtx))
         {
             return;
         }
 
-#pragma warning disable IDE0010 // Add missing cases
-        switch (step.Type)
+        using (logger.BeginScope(new Dictionary<string, object?>
         {
-            case StepType.Activity: await RunActivity(context, step, execCtx, outputNameOverride); break;
-            case StepType.SubOrchestration: await RunSubOrchestration(context, step, execCtx, outputNameOverride); break;
-            case StepType.Foreach: await RunForeach(context, step, execCtx, outputNameOverride); break;
-            case StepType.Parallel: await RunParallel(context, step, execCtx, outputNameOverride); break;
-            case StepType.WaitForEvent: await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
-            case StepType.Switch: await RunSwitch(context, step, execCtx); break;
-            case StepType.Poll: await RunPoll(context, step, execCtx, outputNameOverride); break;
-            case StepType.TriggerAndWait: await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
-            case StepType.Loop: await RunLoop(context, step, execCtx, outputNameOverride); break;
-        }
+            ["StepName"] = step.Name,
+            ["StepType"] = step.Type.ToString()
+        }))
+        {
+#pragma warning disable IDE0010 // Add missing cases
+            switch (step.Type)
+            {
+                case StepType.Activity: await RunActivity(context, step, execCtx, outputNameOverride); break;
+                case StepType.SubOrchestration: await RunSubOrchestration(context, step, execCtx, outputNameOverride); break;
+                case StepType.Foreach: await RunForeach(context, step, execCtx, outputNameOverride); break;
+                case StepType.Parallel: await RunParallel(context, step, execCtx, logger, outputNameOverride); break;
+                case StepType.WaitForEvent: await RunWaitForEvent(context, step, execCtx, outputNameOverride); break;
+                case StepType.Switch: await RunSwitch(context, step, execCtx, logger); break;
+                case StepType.Poll: await RunPoll(context, step, execCtx, outputNameOverride); break;
+                case StepType.TriggerAndWait: await RunTriggerAndWait(context, step, execCtx, outputNameOverride); break;
+                case StepType.Loop: await RunLoop(context, step, execCtx, outputNameOverride); break;
+            }
 #pragma warning restore IDE0010 // Add missing cases
+        }
     }
 
     // ---- Activity ----
@@ -174,13 +192,14 @@ static class WorkflowRunner
         TaskOrchestrationContext context,
         StepDefinition step,
         WorkflowExecutionContext execCtx,
+        ILogger logger,
         string? outputNameOverride = null)
     {
         // Each branch gets a snapshot of the parent context so branches cannot observe
         // each other's in-flight outputs. The step name is the implicit output key.
         var branchScopes = step.Steps.Select(_ => execCtx.CreateParallelBranchScope()).ToList();
         var tasks = step.Steps
-            .Select((child, i) => ExecuteStep(context, child, branchScopes[i], outputNameOverride: child.Name))
+            .Select((child, i) => ExecuteStep(context, child, branchScopes[i], child.Name, logger))
             .ToArray();
         await Task.WhenAll(tasks);
 
@@ -294,7 +313,7 @@ static class WorkflowRunner
 
         var winner = await Task.WhenAny(eventTask, timerTask);
         await Task.WhenAll(winner, activityTask);
-    
+
         if (winner == eventTask)
         {
             cts.Cancel();
@@ -333,14 +352,14 @@ static class WorkflowRunner
 
         var pollerInput = new PollerInput
         {
-            ActivityName    = step.ActivityName!,
-            ActivityInput   = activityInputJson,
-            OutputName      = step.Output!,
+            ActivityName = step.ActivityName!,
+            ActivityInput = activityInputJson,
+            OutputName = step.Output!,
             UntilExpression = step.Until!,
-            Delay           = step.Delay!,
-            Timeout         = step.Timeout,
-            OnTimeout       = step.OnTimeout,
-            StartedAt       = context.CurrentUtcDateTime
+            Delay = step.Delay!,
+            Timeout = step.Timeout,
+            OnTimeout = step.OnTimeout,
+            StartedAt = context.CurrentUtcDateTime
         };
 
         string instanceId = $"{context.InstanceId}:{step.Name ?? step.ActivityName}:poller";
@@ -361,7 +380,8 @@ static class WorkflowRunner
     static async Task RunSwitch(
         TaskOrchestrationContext context,
         StepDefinition step,
-        WorkflowExecutionContext execCtx)
+        WorkflowExecutionContext execCtx,
+        ILogger logger)
     {
         object? onValue = ExpressionEvaluator.Evaluate(step.SwitchOn!, execCtx);
         string key = ExpressionEvaluator.Stringify(onValue);
@@ -373,7 +393,7 @@ static class WorkflowRunner
 
         if (caseSteps != null)
         {
-            await ExecuteSteps(context, caseSteps, execCtx);
+            await ExecuteSteps(context, caseSteps, execCtx, logger);
         }
     }
 
@@ -387,15 +407,15 @@ static class WorkflowRunner
     {
         var loopInput = new LoopInput
         {
-            InnerWorkflowName  = step.LoopWorkflowName!,
-            OutputName         = step.Output!,
+            InnerWorkflowName = step.LoopWorkflowName!,
+            OutputName = step.Output!,
             BreakWhenExpression = step.BreakWhen!,
-            Delay              = step.Delay!,
-            MaxDuration        = step.Timeout,
-            OnTimeout          = step.OnTimeout,
-            StartedAt          = context.CurrentUtcDateTime,
-            PreviousOutputs    = [],
-            ParentInput        = execCtx.Input
+            Delay = step.Delay!,
+            MaxDuration = step.Timeout,
+            OnTimeout = step.OnTimeout,
+            StartedAt = context.CurrentUtcDateTime,
+            PreviousOutputs = [],
+            ParentInput = execCtx.Input
         };
 
         string instanceId = $"{context.InstanceId}:{step.Name}:loop";
