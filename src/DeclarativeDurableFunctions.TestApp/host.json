@@ -2,12 +2,27 @@
   "version": "2.0",
   "logging": {
     "logLevel": {
+      "default": "Information",
+      "Host": "Warning",
+      "Function": "Information",
+      "Host.Aggregator": "Trace",
+      "Azure.Core": "Error",
+      "Azure.Identity": "Error",
+      "DeclarativeDurableFunctions": "Information",
       "DeclarativeDurableFunctions.TestApp": "Trace"
     },
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
-        "excludedTypes": "Request"
+        "excludedTypes": "Trace;Exception"
+      }
+    }
+  },
+  "extensions": {
+    "durableTask": {
+      "tracing": {
+        "distributedTracingEnabled": true,
+        "version": "V2"
       }
     }
   }
