@@ -1,0 +1,17 @@
+workflow:
+  name: VersionTestSubOrch
+  version: 2
+  steps:
+    - name: WaitForConfirmation
+      type: wait-for-event
+      event: VersionTestConfirmed
+      output: confirmation
+
+    - name: LogVersion
+      activity: LogWorkflowVersionActivity
+      input:
+        workflowName: VersionTestSubOrch
+        version: 2
+        instanceId: "{{orchestration.instanceId}}"
+        parentInstanceId: "{{orchestration.parentInstanceId}}"
+      output: logged

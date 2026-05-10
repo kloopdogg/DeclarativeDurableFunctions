@@ -1,0 +1,41 @@
+@host = http://localhost:7071
+
+# Versioning test: start a v1 instance (pauses on wait-for-event inside sub-orch),
+# then start a v2 instance alongside it, confirm each independently.
+# Sub-orch instance IDs are deterministic: {parentId}:RunSubOrch:primary
+
+### VersionTest v1: Start
+POST {{host}}/api/workflows/VersionTest:1
+Content-Type: application/json
+
+{ }
+
+###
+@vtV1Id = fcb01197a50249f58bfe0d147de54d91
+
+### VersionTest v1: Check status
+GET {{host}}/runtime/webhooks/durabletask/instances/{{vtV1Id}}
+
+### VersionTest v2: Start
+POST {{host}}/api/workflows/VersionTest:2
+Content-Type: application/json
+
+{ }
+
+###
+@vtV2Id = 9f36051949f7478b8573cbb9f15cfd4e
+
+### VersionTest v2: Check status
+GET {{host}}/runtime/webhooks/durabletask/instances/{{vtV2Id}}
+
+### VersionTest v1: Confirm sub-orch (logs "VersionTestSubOrch v1" in app logs)
+POST {{host}}/api/events/{{vtV1Id}}:RunSubOrch:primary/VersionTestConfirmed
+Content-Type: application/json
+
+{ "confirmedBy": "tester" }
+
+### VersionTest v2: Confirm sub-orch (logs "VersionTestSubOrch v2" in app logs)
+POST {{host}}/api/events/{{vtV2Id}}:RunSubOrch:primary/VersionTestConfirmed
+Content-Type: application/json
+
+{ "confirmedBy": "tester" }

@@ -1,0 +1,11 @@
+workflow:
+  name: VersionTest
+  version: 1
+  steps:
+    - name: RunSubOrch
+      type: sub-orchestration
+      workflow: VersionTestSubOrch
+      version: 1
+      instanceId: primary
+      input: "{{input}}"
+      output: subOrchResult
