@@ -48,6 +48,11 @@ ScaffoldingReadMe.txt
 # Others
 ~$*
 *~
+
+# Language Server cache
+*.csproj.lscache
+
+# Code coverage results
 CodeCoverage/
 
 # MSBuild Binary and Structured Log
